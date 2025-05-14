@@ -4,3 +4,4 @@ youtube_dl
 instaloader
 requests
 python-dotenv
+flask
