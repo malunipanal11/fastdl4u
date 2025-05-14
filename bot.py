@@ -6,7 +6,7 @@ import asyncio
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, CallbackContext
-from telegram.ext import Filters
+from telegram.ext import filters
 from telegram.error import TelegramError
 import re
 
