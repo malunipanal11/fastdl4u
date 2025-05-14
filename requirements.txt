@@ -7,3 +7,4 @@ python-dotenv
 flask
 flask_sqlalchemy
 python-telegram-bot
+python-telegram-bot==13.15
