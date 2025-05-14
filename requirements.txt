@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+pytube
+youtube_dl
+instaloader
+requests
+python-dotenv
