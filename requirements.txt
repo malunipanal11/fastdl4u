@@ -5,3 +5,4 @@ instaloader
 requests
 python-dotenv
 flask
+flask_sqlalchemy
