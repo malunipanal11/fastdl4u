@@ -1,27 +1,26 @@
 import telebot
 from telebot import types
 import os
+import tempfile
 from downloader import download_media, is_valid_url
 from dotenv import load_dotenv
-import tempfile
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
-user_sessions = {}  # Stores user-selected format (audio/video)
+user_sessions = {}  # To store user-selected URL
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
-    bot.reply_to(message, "Welcome! Send me a media link (YouTube, Instagram, etc.) to begin.")
+    bot.reply_to(message, "Welcome! Send a YouTube, Instagram, or social media link to begin.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     url = message.text.strip()
 
     if not is_valid_url(url):
-        bot.reply_to(message, "❌ Please send a valid YouTube or social media URL.")
+        bot.reply_to(message, "❌ Please send a valid URL from YouTube, Instagram, Facebook, etc.")
         return
 
     user_sessions[message.chat.id] = {'url': url}
@@ -32,7 +31,8 @@ def handle_message(message):
         types.InlineKeyboardButton("Video", callback_data="video"),
         types.InlineKeyboardButton("Audio", callback_data="audio")
     )
-    bot.send_message(message.chat.id, "Select format to download:", reply_markup=markup)
+
+    bot.send_message(message.chat.id, "Choose format to download:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
@@ -46,17 +46,16 @@ def callback_query(call):
 
     msg = bot.send_message(chat_id, "⏬ Downloading, please wait...")
 
-    # Temporary folder
     user_temp_dir = tempfile.mkdtemp()
 
     try:
         download_info = download_media(url, format_type, user_temp_dir)
 
-if 'error' in download_info:
-    error_message = download_info.get("error", "Unknown error")
-    print(">>> Download failed with:", error_message)  # <== ADD THIS LINE
-    status_message.edit_text(f"❌ Download failed: {error_message}")
-    return
+        if 'error' in download_info:
+            error_message = download_info.get("error", "Unknown error")
+            print(">>> Download failed with:", error_message)
+            bot.edit_message_text(f"❌ Download failed: {error_message}", chat_id, msg.message_id)
+            return
 
         file_path = download_info['file_path']
         title = download_info.get('title', 'Downloaded Media')
@@ -70,8 +69,8 @@ if 'error' in download_info:
         bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
 
     except Exception as e:
-        print("Download crashed:", str(e))
-        bot.edit_message_text("❌ An unexpected error occurred.", chat_id, msg.message_id)
+        print(">>> Download crashed with exception:", str(e))
+        bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
 
     finally:
         try:
@@ -81,7 +80,7 @@ if 'error' in download_info:
         except Exception:
             pass
 
-# Start the bot
+# Start bot
 if __name__ == "__main__":
     print("Bot is running...")
     bot.infinity_polling()
