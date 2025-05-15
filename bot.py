@@ -372,7 +372,7 @@ try:
         status_message.edit_text(f"❌ Download failed: {error_message}")
         return
 
-    # (add your success logic here, like sending the file)
+    # You can continue sending the media here if download is successful
 
 except Exception as e:
     print("Download crashed with exception:", str(e))
