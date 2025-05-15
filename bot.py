@@ -362,3 +362,22 @@ class Bot:
     @staticmethod
     def run():
         return run()
+
+try:
+    # Call the download function
+    download_info = download_media(url, format_type, user_temp_dir)
+
+    # If an error was returned, show it
+    if 'error' in download_info:
+        error_message = download_info.get("error", "Unknown error")
+        print("Download failed with error:", error_message)
+        status_message.edit_text(f"❌ Download failed: {error_message}")
+        return
+
+    # Success case continues below...
+
+except Exception as e:
+    # Catch any unexpected crash
+    print("Download crashed with exception:", str(e))
+    status_message.edit_text("❌ An unexpected error occurred during download.")
+    return
