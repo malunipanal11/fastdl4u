@@ -9,7 +9,7 @@ from yt_dlp.utils import DownloadError
 
 from config import MAX_FILE_SIZE_MB
 
-# Logging setup
+# Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -95,7 +95,6 @@ def download_media(url: str, format_type: str, output_dir: str) -> Dict:
         file_path = os.path.join(output_dir, f'{temp_name}.{ext}')
 
         if not os.path.exists(file_path):
-            # Try to find by matching filename
             for f in os.listdir(output_dir):
                 if f.startswith(temp_name):
                     file_path = os.path.join(output_dir, f)
