@@ -1,139 +1,87 @@
+import telebot
+from telebot import types
 import os
-import logging
+from downloader import download_media, is_valid_url
+from dotenv import load_dotenv
 import tempfile
-import shutil
-import asyncio
-import time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, CallbackContext
-from telegram.ext import Filters
-from telegram.error import TelegramError
-import re
 
-from config import BOT_TOKEN, WELCOME_MESSAGE, HELP_MESSAGE
-from downloader import download_media, is_valid_url, get_platform_name
-from utils import cleanup_user_data, create_temp_dir, format_size
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# Define temp directory for downloads
-TEMP_DIR = os.path.join(tempfile.gettempdir(), "fastdl4u_bot")
+user_sessions = {}  # Stores user-selected format (audio/video)
 
-# Create temp directory if it doesn't exist
-if not os.path.exists(TEMP_DIR):
-    os.makedirs(TEMP_DIR)
+@bot.message_handler(commands=['start'])
+def start_handler(message):
+    bot.reply_to(message, "Welcome! Send me a media link (YouTube, Instagram, etc.) to begin.")
 
-# Track user sessions and downloads
-user_data = {}
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    url = message.text.strip()
 
-def start_command(update: Update, context: CallbackContext):
-    """Send welcome message when the command /start is issued."""
-    user = update.effective_user
-    
-    # Try to import db and User model here to avoid circular imports
+    if not is_valid_url(url):
+        bot.reply_to(message, "❌ Please send a valid YouTube or social media URL.")
+        return
+
+    user_sessions[message.chat.id] = {'url': url}
+
+    markup = types.InlineKeyboardMarkup()
+    markup.row_width = 2
+    markup.add(
+        types.InlineKeyboardButton("Video", callback_data="video"),
+        types.InlineKeyboardButton("Audio", callback_data="audio")
+    )
+    bot.send_message(message.chat.id, "Select format to download:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    format_type = call.data
+    chat_id = call.message.chat.id
+    url = user_sessions.get(chat_id, {}).get('url')
+
+    if not url:
+        bot.send_message(chat_id, "❌ Session expired. Please send the link again.")
+        return
+
+    msg = bot.send_message(chat_id, "⏬ Downloading, please wait...")
+
+    # Temporary folder
+    user_temp_dir = tempfile.mkdtemp()
+
     try:
-        from models import db, User
-        from main import get_flask_app
-        
-        # Get the Flask app instance
-        flask_app = get_flask_app()
-        
-        if flask_app:
-            # Save user to database if they don't exist
-            with flask_app.app_context():
-                existing_user = User.query.filter_by(telegram_id=user.id).first()
-                if not existing_user:
-                    new_user = User(
-                        telegram_id=user.id,
-                        username=user.username,
-                        first_name=user.first_name,
-                        last_name=user.last_name
-                    )
-                    db.session.add(new_user)
-                    db.session.commit()
-                    logging.info(f"New user saved to database: {user.id}")
-                else:
-                    # Update user info if it has changed
-                    if (existing_user.username != user.username or 
-                        existing_user.first_name != user.first_name or 
-                        existing_user.last_name != user.last_name):
-                        existing_user.username = user.username
-                        existing_user.first_name = user.first_name
-                        existing_user.last_name = user.last_name
-                        db.session.commit()
-                        logging.info(f"Updated user info in database: {user.id}")
-        else:
-            logging.error("Flask app not available in global context")
+        download_info = download_media(url, format_type, user_temp_dir)
+
+        if 'error' in download_info:
+            error_msg = download_info.get('error', 'Download failed')
+            print("Download failed with error:", error_msg)
+            bot.edit_message_text(f"❌ Download failed: {error_msg}", chat_id, msg.message_id)
+            return
+
+        file_path = download_info['file_path']
+        title = download_info.get('title', 'Downloaded Media')
+
+        with open(file_path, 'rb') as f:
+            if format_type == 'video':
+                bot.send_video(chat_id, video=f, caption=title)
+            else:
+                bot.send_audio(chat_id, audio=f, caption=title)
+
+        bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
+
     except Exception as e:
-        logging.error(f"Error saving user to database: {str(e)}")
-    
-    update.message.reply_text(
-        f"Hello, {user.first_name}!\n{WELCOME_MESSAGE}",
-        parse_mode='Markdown'
-    )
+        print("Download crashed:", str(e))
+        bot.edit_message_text("❌ An unexpected error occurred.", chat_id, msg.message_id)
 
-def help_command(update: Update, context: CallbackContext):
-    """Send help message when the command /help is issued."""
-    update.message.reply_text(
-        HELP_MESSAGE,
-        parse_mode='Markdown'
-    )
+    finally:
+        try:
+            for file in os.listdir(user_temp_dir):
+                os.remove(os.path.join(user_temp_dir, file))
+            os.rmdir(user_temp_dir)
+        except Exception:
+            pass
 
-def cleanup_command(update: Update, context: CallbackContext):
-    """Clean up user downloads and data when the command /cleanup is issued."""
-    user_id = update.effective_user.id
-    
-    if user_id in user_data:
-        # Clean up user data
-        cleanup_user_data(user_id, user_data, TEMP_DIR)
-        update.message.reply_text("✅ All your previous downloads and message history have been cleaned up.")
-    else:
-        update.message.reply_text("No data to clean up.")
-
-def handle_url(update: Update, context: CallbackContext):
-    """Handle messages containing URLs."""
-    message_text = update.message.text
-    user_id = update.effective_user.id
-    
-    # Check if the message contains a URL
-    if not is_valid_url(message_text):
-        update.message.reply_text("Please send a valid URL from a supported platform.")
-        return
-    
-    # Store the URL in user data
-    if user_id not in user_data:
-        user_data[user_id] = {}
-    
-    user_data[user_id]['url'] = message_text
-    platform = get_platform_name(message_text)
-    
-    # Send format selection buttons
-    keyboard = [
-        [
-            InlineKeyboardButton("📹 Video", callback_data="format_video"),
-            InlineKeyboardButton("🎵 Audio (MP3)", callback_data="format_audio")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    update.message.reply_text(
-        f"I detected a {platform} link! Please choose a download format:",
-        reply_markup=reply_markup
-    )
-
-def handle_callback(update: Update, context: CallbackContext):
-    """Handle button callbacks."""
-    query = update.callback_query
-    query.answer()
-    
-    user_id = update.effective_user.id
-    callback_data = query.data
-    
-    if user_id not in user_data or 'url' not in user_data[user_id]:
-        query.edit_message_text("Session expired. Please send the URL again.")
-        return
+# Start the bot
+if __name__ == "__main__":
+    print("Bot is running...")
+    bot.infinity_polling()
