@@ -1,15 +1,16 @@
 from flask import Flask
 import os
-import logging
-import bot  # importing starts the bot (infinity_polling)
+import threading
+import bot  # this imports your TeleBot instance
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 print("Using BOT_TOKEN:", BOT_TOKEN)
 
-# Optional: Render may require a web service to stay live
+# Start bot polling in a background thread
+threading.Thread(target=bot.bot.infinity_polling, daemon=True).start()
+
+# Flask app for Render health check
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 @app.route('/')
 def home():
