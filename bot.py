@@ -268,7 +268,10 @@ def handle_callback(update: Update, context: CallbackContext):
             else:
                 error_message = download_info.get('error', 'Unknown error occurred during download.')
                 print("Download failed with error:", error_message)
-status_message.edit_text("❌ Download failed. Please try a different link or format.")
+if download_info and 'error' in download_info:
+    error_message = download_info.get("error", "Unknown error")
+    print("Download failed with error:", error_message)
+    status_message.edit_text(f"❌ Download failed: {error_message}")
                 
                 # Update download record in database for failed download
                 try:
