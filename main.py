@@ -2,6 +2,8 @@ from flask import Flask
 import os
 import threading
 import bot  # this imports your TeleBot instance
+import bot
+threading.Thread(target=bot.bot.infinity_polling, daemon=True).start()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 print("Using BOT_TOKEN:", BOT_TOKEN)
