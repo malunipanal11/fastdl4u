@@ -1,7 +1,6 @@
 from flask import Flask
 import os
 import logging
-from models import db
 import bot  # importing starts the bot (infinity_polling)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -11,7 +10,6 @@ print("Using BOT_TOKEN:", BOT_TOKEN)
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db.init_app(app)
 
 @app.route('/')
 def home():
