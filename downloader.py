@@ -55,7 +55,37 @@ def get_platform_name(url: str) -> str:
     
     return "Unknown"
 
-async def download_media(url: str, format_type: str, output_dir: str) -> Dict[str, Any]:
+async def download_media(from yt_dlp import YoutubeDL
+import os
+
+def download_media(url, format_type, download_path):
+    print("Downloading from:", url)
+
+    # Create download folder if not exists
+    if not os.path.exists(download_path):
+        os.makedirs(download_path)
+
+    ydl_opts = {
+        'format': 'best' if format_type == 'video' else 'bestaudio',
+        'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
+        'quiet': False,
+        'noplaylist': True
+    }
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            file_path = ydl.prepare_filename(info)
+
+        print("Download successful:", file_path)
+        return {
+            'file_path': file_path,
+            'title': info.get('title', 'Downloaded Media')
+        }
+
+    except Exception as e:
+        print("Download failed with error:", str(e))
+        return {'error': str(e)}) -> Dict[str, Any]:
     """
     Download media from the provided URL.
     
