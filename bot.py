@@ -52,7 +52,7 @@ def callback_query(call):
     try:
         download_info = download_media(url, format_type, user_temp_dir)
 
-        if 'error' in download_info:
+if 'error' in download_info:
     error_message = download_info.get("error", "Unknown error")
     print(">>> Download failed with:", error_message)  # <== ADD THIS LINE
     status_message.edit_text(f"❌ Download failed: {error_message}")
