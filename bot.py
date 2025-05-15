@@ -362,6 +362,7 @@ class Bot:
     @staticmethod
     def run():
         return run()
+
 try:
     download_info = download_media(url, format_type, user_temp_dir)
 
@@ -371,7 +372,9 @@ try:
         status_message.edit_text(f"❌ Download failed: {error_message}")
         return
 
+    # (add your success logic here, like sending the file)
+
 except Exception as e:
     print("Download crashed with exception:", str(e))
-    status_message.edit_text("❌ An unexpected error occurred during download.")
+    status_message.edit_text("❌ Download failed. Please try a different link or format.")
     return
