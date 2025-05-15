@@ -1,13 +1,24 @@
-from flask import Flask, render_template, request, jsonify
-import threading
+from flask import Flask
 import os
+import logging
+from models import db
+import bot  # importing starts the bot (infinity_polling)
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 print("Using BOT_TOKEN:", BOT_TOKEN)
-import logging
-import importlib
-from models import db, User, Download
-import time
 
+# Optional: Render may require a web service to stay live
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
