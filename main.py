@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import threading
 import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+print("Using BOT_TOKEN:", BOT_TOKEN)
 import logging
 import importlib
 from models import db, User, Download
