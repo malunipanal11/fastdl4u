@@ -84,3 +84,22 @@ def callback_query(call):
 if __name__ == "__main__":
     print("Bot is running...")
     bot.infinity_polling()
+
+bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
+
+    except Exception as e:
+        print(">>> Download crashed with exception:", str(e))
+        bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
+
+    finally:
+        try:
+            for file in os.listdir(user_temp_dir):
+                os.remove(os.path.join(user_temp_dir, file))
+            os.rmdir(user_temp_dir)
+        except Exception:
+            pass
+
+# === Start bot when this file is run ===
+if __name__ == "__main__":
+    print("Bot is running...")
+    bot.infinity_polling()
