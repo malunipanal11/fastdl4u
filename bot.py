@@ -1,4 +1,6 @@
 import os
+import os
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 import logging
 import tempfile
 import shutil
