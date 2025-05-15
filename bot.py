@@ -205,7 +205,7 @@ def handle_callback(update: Update, context: CallbackContext):
             asyncio.set_event_loop(new_loop)
             
             # Download the media in the new loop
-            download_info = new_loop.run_until_complete(download_media(url, format_type, user_temp_dir))
+            download_info = download_media(url, format_type, user_temp_dir)
             download_time = time.time() - download_start_time
             
             if download_info and 'file_path' in download_info:
