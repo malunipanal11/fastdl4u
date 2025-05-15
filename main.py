@@ -38,7 +38,7 @@ def get_flask_app():
 
 # Import the Bot class from the bot module after setting up the app
 bot_module = importlib.import_module('bot')
-Bot = getattr(bot_module, 'Bot')
+bot_module.Bot.run()
 bot = Bot()
 
 @app.route('/')
