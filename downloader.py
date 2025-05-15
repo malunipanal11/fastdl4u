@@ -83,7 +83,6 @@ def download_media(url, format_type, download_path):
     except Exception as e:
         print("Download failed with error:", str(e))
         return {'error': str(e)}
--> Dict[str, Any]:
     """
     Download media from the provided URL.
     
