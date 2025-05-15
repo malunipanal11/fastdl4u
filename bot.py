@@ -47,63 +47,8 @@ def callback_query(call):
     msg = bot.send_message(chat_id, "⏬ Downloading, please wait...")
 
     user_temp_dir = tempfile.mkdtemp()
-try:
-    download_info = download_media(url, format_type, user_temp_dir)
 
-    if 'error' in download_info:
-        error_message = download_info.get("error", "Unknown error")
-        print(">>> Download failed with:", error_message)
-        bot.edit_message_text(f"❌ Download failed: {error_message}", chat_id, msg.message_id)
-        return
-
-    file_path = download_info['file_path']
-    title = download_info.get('title', 'Downloaded Media')
-
-    with open(file_path, 'rb') as f:
-        if format_type == 'video':
-            bot.send_video(chat_id, video=f, caption=title)
-        else:
-            bot.send_audio(chat_id, audio=f, caption=title)
-
-    bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
-
-except Exception as e:
-    print(">>> Download crashed with exception:", str(e))
-    bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
-
-finally:
     try:
-        for file in os.listdir(user_temp_dir):
-            os.remove(os.path.join(user_temp_dir, file))
-        os.rmdir(user_temp_dir)
-    except Exception:
-        pass
-
-# Start bot
-if __name__ == "__main__":
-    print("Bot is running...")
-    bot.infinity_polling()
-
-bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
-
-    except Exception as e:
-        print(">>> Download crashed with exception:", str(e))
-        bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
-
-    finally:
-        try:
-            for file in os.listdir(user_temp_dir):
-                os.remove(os.path.join(user_temp_dir, file))
-            os.rmdir(user_temp_dir)
-        except Exception:
-            pass
-
-# === Start bot when this file is run ===
-if __name__ == "__main__":
-    print("Bot is running...")
-    bot.infinity_polling()
-
-try:
         download_info = download_media(url, format_type, user_temp_dir)
 
         if 'error' in download_info:
