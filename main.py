@@ -116,3 +116,5 @@ bot_thread.start()
 # Run the app when this file is executed directly
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
+import bot
+bot.bot.infinity_polling()
