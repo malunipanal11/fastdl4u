@@ -8,3 +8,4 @@ flask
 flask_sqlalchemy
 python-telegram-bot==13.15
 yt_dlp>=2024.10.0
+yt_dlp
