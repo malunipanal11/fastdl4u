@@ -6,17 +6,15 @@ from typing import Dict
 from urllib.parse import urlparse
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
-
 from config import MAX_FILE_SIZE_MB
 
 # Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
-# Supported platforms
 URL_PATTERNS = {
     'youtube': r'(youtube\.com|youtu\.be)',
     'instagram': r'(instagram\.com|instagr\.am)',
@@ -26,20 +24,15 @@ URL_PATTERNS = {
     'facebook': r'(facebook\.com|fb\.watch)',
 }
 
-
 def is_valid_url(url: str) -> bool:
     try:
         result = urlparse(url)
         if not all([result.scheme, result.netloc]):
             return False
         domain = result.netloc.lower()
-        for pattern in URL_PATTERNS.values():
-            if re.search(pattern, domain):
-                return True
-        return False
+        return any(re.search(p, domain) for p in URL_PATTERNS.values())
     except Exception:
         return False
-
 
 def get_platform_name(url: str) -> str:
     domain = urlparse(url).netloc.lower()
@@ -48,9 +41,8 @@ def get_platform_name(url: str) -> str:
             return platform.capitalize()
     return "Unknown"
 
-
 def download_media(url: str, format_type: str, output_dir: str) -> Dict:
-    print("Starting download from:", url)
+    print(">>> Starting download from:", url)
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -62,9 +54,10 @@ def download_media(url: str, format_type: str, output_dir: str) -> Dict:
         'outtmpl': os.path.join(output_dir, f'{temp_name}.%(ext)s'),
         'noplaylist': True,
         'quiet': False,
-        'no_warnings': False,
-        'ignoreerrors': True,
+        'no_warnings': True,
+        'ignoreerrors': False,
         'filesize_limit': max_filesize,
+        'ffmpeg_location': '/usr/bin/ffmpeg',  # Optional: set if you have ffmpeg path issues
     }
 
     if format_type == 'audio':
@@ -78,7 +71,7 @@ def download_media(url: str, format_type: str, output_dir: str) -> Dict:
         })
     else:
         ydl_opts.update({
-            'format': f'best[filesize<{max_filesize}]'
+            'format': f'best[filesize<{max_filesize}]',
         })
 
     try:
@@ -86,18 +79,20 @@ def download_media(url: str, format_type: str, output_dir: str) -> Dict:
             info = ydl.extract_info(url, download=True)
 
         if not info:
-            return {'error': 'Could not download the media'}
+            return {'error': 'Could not extract media info'}
 
+        # Handle playlists
         if 'entries' in info:
             info = info['entries'][0]
 
         ext = 'mp3' if format_type == 'audio' else info.get('ext', 'mp4')
         file_path = os.path.join(output_dir, f'{temp_name}.{ext}')
 
+        # Check fallback in case yt-dlp changed the filename
         if not os.path.exists(file_path):
-            for f in os.listdir(output_dir):
-                if f.startswith(temp_name):
-                    file_path = os.path.join(output_dir, f)
+            for file in os.listdir(output_dir):
+                if file.startswith(temp_name):
+                    file_path = os.path.join(output_dir, file)
                     break
 
         if not os.path.exists(file_path):
@@ -105,7 +100,7 @@ def download_media(url: str, format_type: str, output_dir: str) -> Dict:
 
         if os.path.getsize(file_path) > max_filesize:
             os.remove(file_path)
-            return {'error': f'File size exceeds {MAX_FILE_SIZE_MB}MB'}
+            return {'error': f'File size exceeds the limit of {MAX_FILE_SIZE_MB}MB'}
 
         return {
             'file_path': file_path,
