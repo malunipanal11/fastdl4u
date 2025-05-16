@@ -4,7 +4,7 @@ import threading
 import logging
 from flask_sqlalchemy import SQLAlchemy
 from models import User, Download
-import bot  # This imports your TeleBot instance
+from bot import bot  # This imports your TeleBot instance
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "dev_secret_key")
