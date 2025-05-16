@@ -9,7 +9,11 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
-user_sessions = {}  # To store user-selected URL
+# Print when loaded
+print("Bot module loaded and ready.")
+
+# Session store
+user_sessions = {}
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
@@ -45,7 +49,6 @@ def callback_query(call):
         return
 
     msg = bot.send_message(chat_id, "⏬ Downloading, please wait...")
-
     user_temp_dir = tempfile.mkdtemp()
 
     try:
@@ -53,7 +56,7 @@ def callback_query(call):
 
         if 'error' in download_info:
             error_message = download_info.get("error", "Unknown error")
-            print(">>> Download failed with:", error_message)
+            print(">>> Download failed:", error_message)
             bot.edit_message_text(f"❌ Download failed: {error_message}", chat_id, msg.message_id)
             return
 
@@ -69,7 +72,7 @@ def callback_query(call):
         bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
 
     except Exception as e:
-        print(">>> Download crashed with exception:", str(e))
+        print(">>> Exception during download:", str(e))
         bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
 
     finally:
