@@ -2,9 +2,9 @@ from flask import Flask, jsonify
 import os
 import threading
 import logging
-import importlib
 from flask_sqlalchemy import SQLAlchemy
-from models import User, Download  # Ensure you import these
+from models import User, Download
+import bot  # This imports your TeleBot instance
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "dev_secret_key")
@@ -22,8 +22,6 @@ db = SQLAlchemy(app)
 # Logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-import bot
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 print("Using BOT_TOKEN:", BOT_TOKEN)
@@ -78,14 +76,16 @@ def start_bot():
     try:
         import time
         time.sleep(3)  # delay avoids race condition
-        bot.bot.infinity_polling()
+        bot.infinity_polling()  # <-- fixed line
     except Exception as e:
         logger.error(f"Error starting the bot: {str(e)}")
 
+# Start bot in background
 bot_thread = threading.Thread(target=start_bot)
 bot_thread.daemon = True
 bot_thread.start()
 
+# Start Flask app
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
