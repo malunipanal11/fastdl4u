@@ -2,26 +2,17 @@ from flask import Flask
 import os
 import threading
 import logging
-from bot import bot  # Your TeleBot instance
-
-# Optional: Import if using a database
-# from models import db, User, Download
+from bot import bot  # Import the TeleBot instance from bot.py
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 
-# Get bot token (for debug print)
+# Print bot token for verification
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 print("Using BOT_TOKEN:", BOT_TOKEN)
 
-# Flask app setup
+# Flask app for Render health check
 app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "dev_secret_key")
-
-# Optional DB setup
-# app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///bot.db')
-# app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# db.init_app(app)
 
 @app.route('/')
 def home():
@@ -34,7 +25,7 @@ def start_bot():
     except Exception as e:
         logging.error(f"Bot polling failed: {e}")
 
-# Start bot in a separate thread
+# Run the bot in a separate thread
 bot_thread = threading.Thread(target=start_bot)
 bot_thread.daemon = True
 bot_thread.start()
