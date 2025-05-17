@@ -1,25 +1,14 @@
-from flask import Flask, jsonify
+from flask import Flask
 import os
 import threading
 import logging
-from flask_sqlalchemy import SQLAlchemy
-from models import User, Download
-from bot import bot  # Just imports the bot instance
+from bot import bot  # Only imports the bot instance, no polling inside bot.py
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "dev_secret_key")
+# Load your bot token from env
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+print("Using BOT_TOKEN:", BOT_TOKEN)
 
-# DB config
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///bot.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "pool_recycle": 300,
-    "pool_pre_ping": True,
-}
-
-db = SQLAlchemy(app)
-
-# Start polling only here
+# Start polling the bot in a background thread
 def start_bot():
     try:
         print("Starting bot polling...")
@@ -27,9 +16,13 @@ def start_bot():
     except Exception as e:
         logging.error(f"Bot polling failed: {e}")
 
+# Start the bot thread
 bot_thread = threading.Thread(target=start_bot)
 bot_thread.daemon = True
 bot_thread.start()
+
+# Flask app (Render needs it to stay awake)
+app = Flask(__name__)
 
 @app.route('/')
 def home():
@@ -37,4 +30,4 @@ def home():
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
