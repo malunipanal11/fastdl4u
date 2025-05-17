@@ -2,16 +2,11 @@ from flask import Flask
 import os
 import threading
 import logging
-from bot import bot  # This imports the TeleBot instance, NOT polling
+from bot import bot
 
-# Load BOT token from environment
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 print("Using BOT_TOKEN:", BOT_TOKEN)
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-
-# Define bot polling logic
 def start_bot():
     try:
         print("Starting bot polling...")
@@ -19,12 +14,10 @@ def start_bot():
     except Exception as e:
         logging.error(f"Bot polling failed: {e}")
 
-# Start bot in background thread
 bot_thread = threading.Thread(target=start_bot)
 bot_thread.daemon = True
 bot_thread.start()
 
-# Set up Flask app (required for Render to keep the bot alive)
 app = Flask(__name__)
 
 @app.route('/')
