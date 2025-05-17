@@ -81,6 +81,3 @@ def callback_query(call):
             pass
 
 # ✅ Start polling if this is the main file
-if __name__ == "__main__":
-    print("Polling started from bot.py")
-    bot.infinity_polling()
