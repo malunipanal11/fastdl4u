@@ -4,6 +4,7 @@ import os
 import tempfile
 from downloader import download_media, is_valid_url
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -11,9 +12,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 user_sessions = {}  # To store user-selected URLs
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 @bot.message_handler(commands=['start'])
 def start_handler(message):
-    print("Received /start from", message.chat.id)
+    logger.info("Received /start from %s", message.chat.id)
     bot.reply_to(message, "Welcome! Send a YouTube, Instagram, or social media link to begin.")
 
 @bot.message_handler(func=lambda message: True)
@@ -53,7 +57,7 @@ def callback_query(call):
 
         if 'error' in download_info:
             error_message = download_info.get("error", "Unknown error")
-            print("Download failed:", error_message)
+            logger.error("Download failed: %s", error_message)
             bot.edit_message_text(f"❌ Download failed: {error_message}", chat_id, msg.message_id)
             return
 
@@ -69,7 +73,7 @@ def callback_query(call):
         bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
 
     except Exception as e:
-        print("Exception during download:", str(e))
+        logger.error("Exception during download: %s", str(e))
         bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
 
     finally:
@@ -77,5 +81,5 @@ def callback_query(call):
             for file in os.listdir(user_temp_dir):
                 os.remove(os.path.join(user_temp_dir, file))
             os.rmdir(user_temp_dir)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Error cleaning up temp dir: %s", str(e))
