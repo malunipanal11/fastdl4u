@@ -1,9 +1,9 @@
 import telebot
 from telebot import types
 import os
-import tempfile
 from downloader import download_media, is_valid_url
 from dotenv import load_dotenv
+import tempfile
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,20 +18,16 @@ def start_handler(message):
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     url = message.text.strip()
-
     if not is_valid_url(url):
-        bot.reply_to(message, "❌ Please send a valid URL from YouTube, Instagram, Facebook, etc.")
+        bot.reply_to(message, "❌ Please send a valid URL from YouTube, Instagram, etc.")
         return
 
     user_sessions[message.chat.id] = {'url': url}
-
-    markup = types.InlineKeyboardMarkup()
-    markup.row_width = 2
+    markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("Video", callback_data="video"),
         types.InlineKeyboardButton("Audio", callback_data="audio")
     )
-
     bot.send_message(message.chat.id, "Choose format to download:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -51,29 +47,24 @@ def callback_query(call):
         download_info = download_media(url, format_type, user_temp_dir)
 
         if 'error' in download_info:
-            error_message = download_info.get("error", "Unknown error")
-            print(">>> Download failed with:", error_message)
-            bot.edit_message_text(f"❌ Download failed: {error_message}", chat_id, msg.message_id)
+            bot.edit_message_text(f"❌ Download failed: {download_info['error']}", chat_id, msg.message_id)
             return
 
-        file_path = download_info['file_path']
-        title = download_info.get('title', 'Downloaded Media')
-
-        with open(file_path, 'rb') as f:
+        with open(download_info['file_path'], 'rb') as f:
             if format_type == 'video':
-                bot.send_video(chat_id, video=f, caption=title)
+                bot.send_video(chat_id, f, caption=download_info['title'])
             else:
-                bot.send_audio(chat_id, audio=f, caption=title)
+                bot.send_audio(chat_id, f, caption=download_info['title'])
 
         bot.edit_message_text("✅ Download complete!", chat_id, msg.message_id)
 
     except Exception as e:
-        print(">>> Download crashed with exception:", str(e))
-        bot.edit_message_text("❌ Download failed. Please try a different link or format.", chat_id, msg.message_id)
+        bot.edit_message_text(f"❌ Error: {str(e)}", chat_id, msg.message_id)
+
     finally:
         try:
-            for file in os.listdir(user_temp_dir):
-                os.remove(os.path.join(user_temp_dir, file))
+            for f in os.listdir(user_temp_dir):
+                os.remove(os.path.join(user_temp_dir, f))
             os.rmdir(user_temp_dir)
         except Exception:
             pass
