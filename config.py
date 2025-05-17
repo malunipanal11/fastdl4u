@@ -12,7 +12,7 @@ API_HASH = os.getenv("API_HASH")
 if not BOT_TOKEN:
     logger.warning("BOT_TOKEN environment variable is not set. The bot will not function correctly.")
 
-MAX_FILE_SIZE_MB = 150
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 150))
 
 WELCOME_MESSAGE = """
 👋 Welcome to FastDL4U Bot!
