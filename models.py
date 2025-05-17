@@ -1,7 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 
-# Initialize SQLAlchemy without a specific app (we'll set it up later)
 db = SQLAlchemy()
 
 class User(db.Model):
@@ -26,11 +25,11 @@ class Download(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     url = db.Column(db.String(500), nullable=False)
     platform = db.Column(db.String(50), nullable=False)
-    format_type = db.Column(db.String(20), nullable=False)  # 'video' or 'audio'
+    format_type = db.Column(db.String(20), db.CheckConstraint("format_type IN ('video', 'audio')"), nullable=False)
     title = db.Column(db.String(200), nullable=True)
     file_size = db.Column(db.BigInteger, nullable=True)  # Size in bytes
     download_time = db.Column(db.Float, nullable=True)  # Time taken to download in seconds
-    status = db.Column(db.String(20), nullable=False, default='started')  # 'started', 'completed', 'failed'
+    status = db.Column(db.String(20), db.CheckConstraint("status IN ('started', 'completed', 'failed')"), nullable=False, default='started')
     error_message = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
