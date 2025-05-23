@@ -4,6 +4,8 @@ import signal
 import subprocess
 import logging
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +27,16 @@ if not BOT_TOKEN:
     exit(1)
 
 logger.info("Bot monitor starting with token: " + BOT_TOKEN[:5] + "...")
+
+# Minimal Flask web server to keep Render's free web service alive
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
 def start_bot_process():
     """Start the bot process and return the process object."""
@@ -49,6 +61,11 @@ def monitor_bot():
 
 if __name__ == "__main__":
     logger.info("==== 24/7 Bot Monitor Started ====")
+
+    # Start Flask in background thread
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
+
     try:
         monitor_bot()
     except KeyboardInterrupt:
