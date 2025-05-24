@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# Logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -14,17 +13,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("BotMonitor")
 
-# Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN not found. Please set it in the environment.")
+    logger.error("BOT_TOKEN not found.")
     exit(1)
 
-logger.info("Bot monitor starting with token prefix: " + BOT_TOKEN[:5] + "...")
+logger.info("Bot monitor starting with token: " + BOT_TOKEN[:5] + "...")
 
-# Minimal Flask app to keep service alive
 app = Flask(__name__)
 
 @app.route('/')
@@ -42,7 +38,7 @@ def monitor_bot():
     while True:
         process = start_bot_process()
         process.wait()
-        logger.warning(f"Bot exited with code {process.returncode}. Restarting in 5 seconds...")
+        logger.warning(f"Bot crashed. Restarting in 5 seconds...")
         time.sleep(5)
 
 if __name__ == "__main__":
@@ -53,6 +49,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Monitor stopped by user")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Monitoring error: {e}")
     finally:
         logger.info("==== Bot Monitor Stopped ====")
