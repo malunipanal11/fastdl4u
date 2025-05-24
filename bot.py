@@ -22,7 +22,7 @@ if not BOT_TOKEN:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TelegramBot")
 
-# Supported platforms
+# Supported domains
 SUPPORTED_DOMAINS = [
     "youtube.com", "youtu.be", "instagram.com", "facebook.com",
     "twitter.com", "tiktok.com", "vimeo.com", "soundcloud.com",
@@ -59,7 +59,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_supported_platform(url):
         await update.message.reply_text(
-            "❌ Unsupported platform.\nSupported: YouTube, Instagram, Facebook, TikTok, Vimeo, SoundCloud, TeraBox."
+            "❌ Unsupported platform.\nSupported: YouTube, Instagram, Facebook, Twitter, TikTok, Vimeo, SoundCloud, Dailymotion, and TeraBox."
         )
         return
 
@@ -102,7 +102,10 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"yt-dlp error: {e}")
-        await msg.edit_text("❌ Could not process the link.")
+        await msg.edit_text(
+            "❌ I couldn’t download this. Please make sure the link is public and supported.\n\n"
+            "Supported platforms: YouTube, Instagram, Facebook, Twitter, TikTok, Vimeo, SoundCloud, Dailymotion, and TeraBox."
+        )
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
