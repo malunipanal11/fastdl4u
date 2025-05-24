@@ -12,7 +12,7 @@ from telegram.ext import (
 )
 import yt_dlp
 
-# Load environment variables
+# Load environment
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -20,9 +20,9 @@ if not BOT_TOKEN:
 
 # Logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("MediaBot")
+logger = logging.getLogger("TelegramBot")
 
-# Supported domains
+# Supported platforms
 SUPPORTED_DOMAINS = [
     "youtube.com", "youtu.be", "instagram.com", "facebook.com",
     "twitter.com", "tiktok.com", "vimeo.com", "soundcloud.com",
@@ -51,16 +51,16 @@ def get_terabox_info(url):
         logger.error(f"TeraBox error: {e}")
     return None
 
-# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome! Send a video or TeraBox link to begin.")
 
-# /handle link
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
 
     if not is_supported_platform(url):
-        await update.message.reply_text("❌ Unsupported platform.\nSupported: YouTube, Facebook, Instagram, TikTok, Vimeo, TeraBox.")
+        await update.message.reply_text(
+            "❌ Unsupported platform.\nSupported: YouTube, Instagram, Facebook, TikTok, Vimeo, SoundCloud, TeraBox."
+        )
         return
 
     if is_terabox_link(url):
@@ -70,19 +70,19 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"**File:** {info['name']}\n"
                 f"**Size:** {info['size']} MB\n"
-                f"[Download Link]({info['download_url']})",
+                f"[Download Now]({info['download_url']})",
                 parse_mode="Markdown", disable_web_page_preview=True
             )
         else:
             await update.message.reply_text("❌ Could not get TeraBox file info.")
         return
 
-    # yt_dlp video info
-    msg = await update.message.reply_text("🔍 Analyzing video link...")
+    msg = await update.message.reply_text("🔍 Analyzing link...")
     try:
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
-        title = info.get("title")
+
+        title = info.get("title", "Unknown")
         duration = info.get("duration_string") or f"{info.get('duration', 0)} sec"
         platform = info.get("extractor_key")
         thumbnail = info.get("thumbnail")
@@ -91,6 +91,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Video 🎬", callback_data=f"video|{url}")],
             [InlineKeyboardButton("Audio 🎧", callback_data=f"audio|{url}")]
         ])
+
         await msg.delete()
         await update.message.reply_photo(
             photo=thumbnail,
@@ -98,11 +99,11 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=buttons
         )
-    except Exception as e:
-        logger.error(e)
-        await msg.edit_text("❌ Could not process the link. Try a different one.")
 
-# /download handler
+    except Exception as e:
+        logger.error(f"yt-dlp error: {e}")
+        await msg.edit_text("❌ Could not process the link.")
+
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -110,7 +111,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_name = f"temp_{int(time.time())}"
     output = f"{file_name}.mp4" if action == "video" else f"{file_name}.mp3"
 
-    msg = await query.message.reply_text("⏬ Downloading...")
+    msg = await query.message.reply_text("⬇️ Downloading...")
 
     def progress_hook(d):
         if d['status'] == 'downloading':
@@ -132,22 +133,21 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        await msg.edit_text("⬆️ Uploading to GoFile...")
+        await msg.edit_text("📤 Uploading...")
 
         with open(output, 'rb') as f:
             upload = requests.post("https://store1.gofile.io/uploadFile", files={'file': f})
         result = upload.json()
         dl_url = result['data']['downloadPage']
 
-        await msg.edit_text(f"✅ Your file is ready:\n[Download Now]({dl_url})", parse_mode="Markdown")
+        await msg.edit_text(f"✅ Done: [Download Now]({dl_url})", parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Download/upload error: {e}")
-        await msg.edit_text("❌ Download failed. Try a different link.")
+        logger.error(f"Download error: {e}")
+        await msg.edit_text("❌ Failed. Try another link.")
     finally:
         if os.path.exists(output):
             os.remove(output)
 
-# Main app
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
