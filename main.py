@@ -5,7 +5,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from yt_dlp import YoutubeDL
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = f"https://your-render-service-name.onrender.com/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"https://fastdl4u.onrender.com/webhook/{BOT_TOKEN}"
 DOWNLOAD_FOLDER = "downloads"
 JSON_LOG = "file_log.json"
 
