@@ -1,7 +1,6 @@
 fastapi
 uvicorn
-python-telegram-bot==20.0
-requests
-yt-dlp
 jinja2
-aiofiles
+python-telegram-bot==20.6
+yt-dlp
+requests
