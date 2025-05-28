@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.log
+downloads/
+file_log.json
+.env
