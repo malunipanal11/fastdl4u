@@ -1,9 +1,8 @@
 import os
 import uvicorn
 import json
-import uuid
 import asyncio
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -38,19 +37,9 @@ def save_log(data):
             log = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         log = []
-
     log.append(data)
     with open(JSON_LOG, "w") as f:
         json.dump(log, f, indent=2)
-
-def generate_filename(original):
-    base, ext = os.path.splitext(original)
-    filename = f"{base}{ext}"
-    count = 1
-    while os.path.exists(os.path.join(DOWNLOAD_FOLDER, filename)):
-        filename = f"{base}_{count}{ext}"
-        count += 1
-    return filename
 
 def upload_to_fileio(filepath):
     with open(filepath, "rb") as f:
@@ -64,7 +53,6 @@ async def start(update: Update, context):
 async def handle_message(update: Update, context):
     url = update.message.text.strip()
     await update.message.reply_text("⏳ Processing your link...")
-
     try:
         with YoutubeDL({'outtmpl': f"{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s"}) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -74,7 +62,7 @@ async def handle_message(update: Update, context):
         name = os.path.basename(filename)
         await update.message.reply_document(document=open(filename, "rb"), filename=name)
         await update.message.reply_text(f"📁 Web Download Link: {file_link}")
-        
+
         save_log({
             "title": info.get("title"),
             "file": name,
@@ -120,6 +108,36 @@ async def webhook(token: str, request: Request):
     update = Update.de_json(data, bot)
     await telegram_app.update_queue.put(update)
     return {"ok": True}
+
+@app.post("/api/download")
+async def api_download(request: Request):
+    try:
+        body = await request.json()
+        url = body.get("url")
+        if not url:
+            raise HTTPException(status_code=400, detail="No URL provided")
+
+        with YoutubeDL({'outtmpl': f"{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s"}) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+        name = os.path.basename(filename)
+        file_url = f"/downloads/{name}"
+
+        save_log({
+            "title": info.get("title"),
+            "file": name,
+            "url": file_url
+        })
+
+        return {
+            "success": True,
+            "file_url": file_url,
+            "title": info.get("title")
+        }
+
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 @app.on_event("startup")
 async def startup():
