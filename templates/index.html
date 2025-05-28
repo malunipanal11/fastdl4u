@@ -1,88 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Social Media Downloader</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100 p-4">
-  <div class="max-w-2xl mx-auto bg-white rounded-xl shadow-md p-6">
-    <h1 class="text-2xl font-bold mb-4 text-center">📥 Social Media Downloader</h1>
+<body class="bg-gray-100 text-gray-800 font-sans">
+  <div class="max-w-xl mx-auto p-6">
+    <h1 class="text-3xl font-bold mb-4 text-center">📥 Social Media Downloader</h1>
 
     <form id="downloadForm" class="space-y-4">
-      <input type="text" id="link" placeholder="Paste video/audio link..." class="w-full p-2 border rounded" required>
-
+      <input
+        type="url"
+        name="url"
+        placeholder="Paste media link here..."
+        class="w-full p-3 border rounded-lg focus:outline-none focus:ring focus:border-blue-300"
+        required
+      />
       <div class="flex gap-4">
-        <label class="flex items-center">
-          <input type="radio" name="format" value="video" checked class="mr-2"> Video
-        </label>
-        <label class="flex items-center">
-          <input type="radio" name="format" value="audio" class="mr-2"> Audio
-        </label>
+        <button
+          type="submit"
+          class="flex-1 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition"
+        >
+          Download
+        </button>
       </div>
-
-      <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-        🚀 Process
-      </button>
     </form>
 
-    <div id="result" class="mt-6 hidden">
-      <img id="thumb" src="" alt="Thumbnail" class="w-full rounded mb-2">
-      <p><strong>Title:</strong> <span id="title"></span></p>
-      <p><strong>Duration:</strong> <span id="duration"></span> sec</p>
-      <p><strong>Size:</strong> <span id="size"></span> MB</p>
-      <p><strong>Quality:</strong> <span id="quality"></span></p>
-
-      <div class="flex gap-3 mt-4">
-        <a id="playBtn" href="#" target="_blank" class="bg-green-600 text-white px-4 py-2 rounded">▶ Play</a>
-        <a id="downloadBtn" href="#" download class="bg-yellow-500 text-white px-4 py-2 rounded">⬇ Download</a>
-        <a id="sendBtn" href="#" class="bg-purple-600 text-white px-4 py-2 rounded">📤 Send to Bot</a>
-        <a id="deleteBtn" href="#" class="bg-red-600 text-white px-4 py-2 rounded">❌ Delete</a>
-      </div>
+    <div id="status" class="mt-6 hidden p-4 bg-white rounded shadow">
+      <div class="mb-2 text-lg font-semibold">🔄 Processing...</div>
+      <progress id="progressBar" value="0" max="100" class="w-full h-3"></progress>
+      <div id="progressText" class="text-sm mt-2 text-gray-600">Starting...</div>
     </div>
 
-    <p id="loading" class="text-center mt-6 hidden text-blue-600 font-semibold">Processing... Please wait ⏳</p>
-    <p id="error" class="text-red-600 mt-4 hidden">❌ Error: Something went wrong!</p>
+    <div id="result" class="mt-6 hidden p-4 bg-white rounded shadow">
+      <h2 class="text-xl font-semibold mb-2">✅ File Ready</h2>
+      <video id="videoPlayer" controls class="w-full rounded"></video>
+      <div class="flex flex-wrap gap-2 mt-4">
+        <a id="playBtn" target="_blank" class="bg-green-500 text-white px-3 py-2 rounded hover:bg-green-600">▶️ Play</a>
+        <a id="downloadBtn" target="_blank" class="bg-blue-500 text-white px-3 py-2 rounded hover:bg-blue-600">⬇️ Download</a>
+        <button id="sendBtn" class="bg-purple-500 text-white px-3 py-2 rounded hover:bg-purple-600">📤 Send to Telegram</button>
+        <button id="deleteBtn" class="bg-red-500 text-white px-3 py-2 rounded hover:bg-red-600">🗑️ Delete</button>
+      </div>
+    </div>
   </div>
 
   <script>
-    document.getElementById("downloadForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const link = document.getElementById("link").value;
-      const format = document.querySelector('input[name="format"]:checked').value;
+    const form = document.getElementById('downloadForm');
+    const statusBox = document.getElementById('status');
+    const resultBox = document.getElementById('result');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const videoPlayer = document.getElementById('videoPlayer');
+    const playBtn = document.getElementById('playBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
 
-      document.getElementById("loading").classList.remove("hidden");
-      document.getElementById("result").classList.add("hidden");
-      document.getElementById("error").classList.add("hidden");
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const url = form.url.value.trim();
+      if (!url) return;
+
+      statusBox.classList.remove('hidden');
+      resultBox.classList.add('hidden');
+      progressBar.value = 10;
+      progressText.innerText = 'Downloading...';
 
       try {
-        const res = await fetch("/api/process", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ link, format }),
+        const res = await fetch('/api/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
         });
 
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Unknown error");
+        if (!data.success) throw new Error(data.message);
 
-        document.getElementById("thumb").src = data.thumbnail;
-        document.getElementById("title").textContent = data.title;
-        document.getElementById("duration").textContent = data.duration || "N/A";
-        document.getElementById("size").textContent = data.size || "N/A";
-        document.getElementById("quality").textContent = data.quality || "N/A";
+        progressBar.value = 100;
+        progressText.innerText = 'Done!';
+        resultBox.classList.remove('hidden');
 
-        document.getElementById("playBtn").href = data.file_url;
-        document.getElementById("downloadBtn").href = data.file_url;
-        document.getElementById("sendBtn").href = `https://t.me/share/url?url=${encodeURIComponent(data.file_url)}&text=${encodeURIComponent(data.title)}`;
-        document.getElementById("deleteBtn").href = "#"; // You can add delete logic later
+        videoPlayer.src = data.file_url;
+        playBtn.href = data.file_url;
+        downloadBtn.href = data.file_url;
 
-        document.getElementById("result").classList.remove("hidden");
       } catch (err) {
-        document.getElementById("error").textContent = "❌ Error: " + err.message;
-        document.getElementById("error").classList.remove("hidden");
+        progressText.innerText = 'Error: ' + err.message;
       }
-
-      document.getElementById("loading").classList.add("hidden");
     });
   </script>
 </body>
