@@ -1,52 +1,137 @@
-import os import uuid import json import aiofiles import requests import yt_dlp from fastapi import FastAPI, Request, Form from fastapi.responses import HTMLResponse, FileResponse from fastapi.templating import Jinja2Templates from fastapi.staticfiles import StaticFiles from telegram import Bot, Update from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import os
+import uvicorn
+import json
+import uuid
+import asyncio
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from yt_dlp import YoutubeDL
+import requests
 
-Telegram Bot Token
-
+# === CONFIGURATION ===
 BOT_TOKEN = "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw"
+WEBHOOK_URL = f"https://fastdl4u.onrender.com/webhook/{BOT_TOKEN}"
+DOWNLOAD_FOLDER = "downloads"
+JSON_LOG = "file_log.json"
+FILE_IO_API = "https://file.io"
 
-Directories
+# Ensure downloads folder exists
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-DOWNLOAD_FOLDER = "downloads" os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+# === FASTAPI SETUP ===
+app = FastAPI()
+app.mount("/downloads", StaticFiles(directory=DOWNLOAD_FOLDER), name="downloads")
+templates = Jinja2Templates(directory="templates")
 
-File Log
+# === TELEGRAM SETUP ===
+bot = Bot(token=BOT_TOKEN)
+telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-FILE_LOG = "file_log.json" if not os.path.exists(FILE_LOG): with open(FILE_LOG, 'w') as f: json.dump({}, f)
+# === UTILITIES ===
+def save_log(data):
+    try:
+        with open(JSON_LOG, "r") as f:
+            log = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        log = []
 
-FastAPI App
+    log.append(data)
+    with open(JSON_LOG, "w") as f:
+        json.dump(log, f, indent=2)
 
-app = FastAPI() app.mount("/downloads", StaticFiles(directory=DOWNLOAD_FOLDER), name="downloads") templates = Jinja2Templates(directory="templates")
+def generate_filename(original):
+    base, ext = os.path.splitext(original)
+    filename = f"{base}{ext}"
+    count = 1
+    while os.path.exists(os.path.join(DOWNLOAD_FOLDER, filename)):
+        filename = f"{base}_{count}{ext}"
+        count += 1
+    return filename
 
-Telegram Bot App
+def upload_to_fileio(filepath):
+    with open(filepath, "rb") as f:
+        res = requests.post(FILE_IO_API, files={"file": f})
+    return res.json().get("link")
 
-telegram_app = Application.builder().token(BOT_TOKEN).build() bot = Bot(BOT_TOKEN)
+# === TELEGRAM HANDLERS ===
+async def start(update: Update, context):
+    await update.message.reply_text("📥 Send me a media link and I will download it for you!")
 
-Utility: Save log
+async def handle_message(update: Update, context):
+    url = update.message.text.strip()
+    await update.message.reply_text("⏳ Processing your link...")
 
-def save_log(data): with open(FILE_LOG, 'w') as f: json.dump(data, f, indent=2)
+    try:
+        with YoutubeDL({'outtmpl': f"{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s"}) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+        
+        file_link = upload_to_fileio(filename)
+        name = os.path.basename(filename)
+        await update.message.reply_document(document=open(filename, "rb"), filename=name)
+        await update.message.reply_text(f"📁 Web Download Link: {file_link}")
+        
+        save_log({
+            "title": info.get("title"),
+            "file": name,
+            "url": file_link
+        })
 
-Utility: Download media
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
-def download_media(url): unique_id = str(uuid.uuid4()) ydl_opts = { 'outtmpl': os.path.join(DOWNLOAD_FOLDER, f'%(title)s.%(ext)s'), 'format': 'bestvideo+bestaudio/best', } with yt_dlp.YoutubeDL(ydl_opts) as ydl: info = ydl.extract_info(url, download=True) filename = ydl.prepare_filename(info) return filename, info
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-FastAPI Web Routes
+# === WEB ROUTES ===
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    try:
+        with open(JSON_LOG, "r") as f:
+            files = json.load(f)
+    except:
+        files = []
+    return templates.TemplateResponse("index.html", {"request": request, "files": files})
 
-@app.get("/", response_class=HTMLResponse) async def home(request: Request): files = os.listdir(DOWNLOAD_FOLDER) return templates.TemplateResponse("index.html", {"request": request, "files": files})
+@app.get("/play/{filename}", response_class=FileResponse)
+async def play_file(filename: str):
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if os.path.exists(path):
+        return FileResponse(path, media_type="video/mp4")
+    return HTMLResponse("File not found", status_code=404)
 
-@app.post("/download") async def download(request: Request, url: str = Form(...)): try: filepath, info = download_media(url) filename = os.path.basename(filepath) with open(FILE_LOG) as f: log = json.load(f) log[filename] = info.get('title', filename) save_log(log) return templates.TemplateResponse("index.html", {"request": request, "files": os.listdir(DOWNLOAD_FOLDER), "message": f"Downloaded: {filename}"}) except Exception as e: return templates.TemplateResponse("index.html", {"request": request, "files": os.listdir(DOWNLOAD_FOLDER), "message": f"Error: {str(e)}"})
+@app.get("/delete/{filename}")
+async def delete_file(filename: str):
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if os.path.exists(path):
+        os.remove(path)
+    return HTMLResponse("Deleted", status_code=200)
 
-@app.get("/file/{filename}") async def serve_file(filename: str): file_path = os.path.join(DOWNLOAD_FOLDER, filename) if os.path.exists(file_path): return FileResponse(file_path) return {"error": "File not found"}
+@app.post("/webhook/{token}")
+async def webhook(token: str, request: Request):
+    if token != BOT_TOKEN:
+        return HTMLResponse("Invalid token", status_code=403)
 
-Telegram Handlers
+    data = await request.json()
+    update = Update.de_json(data, bot)
+    await telegram_app.update_queue.put(update)
+    return {"ok": True}
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👋 Send me a video URL to download.")
+@app.on_event("startup")
+async def startup():
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await bot.set_webhook(WEBHOOK_URL)
+    print("✅ Webhook set to", WEBHOOK_URL)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE): url = update.message.text try: filepath, info = download_media(url) await update.message.reply_video(video=open(filepath, 'rb'), caption=f"🎬 {info.get('title', 'Downloaded')}\n📥 File ready.") except Exception as e: await update.message.reply_text(f"❌ Error: {str(e)}")
+@app.on_event("shutdown")
+async def shutdown():
+    await telegram_app.stop()
 
-telegram_app.add_handler(CommandHandler("start", start)) telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-@app.on_event("startup") async def startup(): print("✅ Starting bot...") await telegram_app.initialize() await telegram_app.start() await bot.set_webhook(f"https://fastdl4u.onrender.com/webhook/{BOT_TOKEN}")
-
-@app.on_event("shutdown") async def shutdown(): print("🛑 Shutting down bot...") await telegram_app.stop()
-
-@app.post("/webhook/{token}") async def webhook(request: Request, token: str): if token != BOT_TOKEN: return {"status": "unauthorized"} update_data = await request.json() update = Update.de_json(update_data, bot) await telegram_app.process_update(update) return {"status": "ok"}
-
+# === MAIN ENTRY ===
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
