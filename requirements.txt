@@ -1,6 +1,4 @@
-fastapi
-uvicorn
-jinja2
-python-telegram-bot==20.6
-yt-dlp
-requests
+fastapi==0.110.1
+uvicorn==0.29.0
+python-telegram-bot==20.8
+yt-dlp==2024.03.10
