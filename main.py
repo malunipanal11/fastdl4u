@@ -1,95 +1,115 @@
-import os
-import uvicorn
-import json
-import asyncio
-from fastapi import FastAPI, Request, Form, HTTPException
+# main.py
+import os, json, asyncio, re, requests
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from yt_dlp import YoutubeDL
-import requests
 
-# === CONFIGURATION ===
-BOT_TOKEN = "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw"
-WEBHOOK_URL = f"https://fastdl4u.onrender.com/webhook/{BOT_TOKEN}"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+WEBHOOK_URL = f"https://yourdomain.com/webhook/{BOT_TOKEN}"
 DOWNLOAD_FOLDER = "downloads"
 JSON_LOG = "file_log.json"
-FILE_IO_API = "https://file.io"
 
-# Ensure downloads folder exists
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-
-# === FASTAPI SETUP ===
 app = FastAPI()
 app.mount("/downloads", StaticFiles(directory=DOWNLOAD_FOLDER), name="downloads")
 templates = Jinja2Templates(directory="templates")
 
-# === TELEGRAM SETUP ===
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 bot = Bot(token=BOT_TOKEN)
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# === UTILITIES ===
 def save_log(data):
-    try:
+    log = []
+    if os.path.exists(JSON_LOG):
         with open(JSON_LOG, "r") as f:
-            log = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        log = []
+            try:
+                log = json.load(f)
+            except: pass
     log.append(data)
     with open(JSON_LOG, "w") as f:
         json.dump(log, f, indent=2)
 
-def upload_to_fileio(filepath):
-    with open(filepath, "rb") as f:
-        res = requests.post(FILE_IO_API, files={"file": f})
-    return res.json().get("link")
+def download_video(url: str):
+    ydl_opts = {
+        'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
+        'format': 'best',
+    }
 
-# === TELEGRAM HANDLERS ===
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filepath = ydl.prepare_filename(info)
+        return filepath, info.get("title")
+
+def is_terabox_link(url):
+    return any(p in url for p in ["terabox.com", "1024terabox.com"])
+
+def resolve_terabox_link(url):
+    match = re.search(r"/s/([^/?#]+)", url)
+    if not match:
+        raise Exception("Invalid Terabox link format.")
+    share_id = match.group(1)
+    # Dummy fallback file
+    filename = f"{share_id}.txt"
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+    with open(path, "w") as f:
+        f.write(f"Download manually from: {url}")
+    return path, "Manual Download Link"
+
+# Telegram Bot Handlers
 async def start(update: Update, context):
-    await update.message.reply_text("📥 Send me a media link and I will download it for you!")
+    await update.message.reply_text("📥 Send me a link from YouTube, Terabox, etc. and I will download it.")
 
 async def handle_message(update: Update, context):
     url = update.message.text.strip()
-    await update.message.reply_text("⏳ Processing your link...")
+    await update.message.reply_text("⏳ Processing...")
     try:
-        with YoutubeDL({'outtmpl': f"{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s"}) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-        
-        file_link = upload_to_fileio(filename)
-        name = os.path.basename(filename)
-        await update.message.reply_document(document=open(filename, "rb"), filename=name)
-        await update.message.reply_text(f"📁 Web Download Link: {file_link}")
+        if is_terabox_link(url):
+            path, title = resolve_terabox_link(url)
+        else:
+            path, title = download_video(url)
 
-        save_log({
-            "title": info.get("title"),
-            "file": name,
-            "url": file_link
-        })
-
+        await update.message.reply_document(document=open(path, "rb"), filename=os.path.basename(path))
+        save_log({"title": title, "file": os.path.basename(path), "url": f"/downloads/{os.path.basename(path)}"})
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# === WEB ROUTES ===
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def home(request: Request):
+    files = []
     try:
         with open(JSON_LOG, "r") as f:
             files = json.load(f)
-    except:
-        files = []
+    except: pass
     return templates.TemplateResponse("index.html", {"request": request, "files": files})
+
+@app.post("/api/download")
+async def api_download(request: Request):
+    body = await request.json()
+    url = body.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="No URL provided")
+    try:
+        if is_terabox_link(url):
+            path, title = resolve_terabox_link(url)
+        else:
+            path, title = download_video(url)
+        file_url = f"/downloads/{os.path.basename(path)}"
+        save_log({"title": title, "file": os.path.basename(path), "url": file_url})
+        return {"success": True, "file_url": file_url, "title": title}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 @app.get("/play/{filename}", response_class=FileResponse)
 async def play_file(filename: str):
     path = os.path.join(DOWNLOAD_FOLDER, filename)
     if os.path.exists(path):
-        return FileResponse(path, media_type="video/mp4")
+        return FileResponse(path)
     return HTMLResponse("File not found", status_code=404)
 
 @app.get("/delete/{filename}")
@@ -100,56 +120,24 @@ async def delete_file(filename: str):
     return HTMLResponse("Deleted", status_code=200)
 
 @app.post("/webhook/{token}")
-async def webhook(token: str, request: Request):
+async def telegram_webhook(token: str, request: Request):
     if token != BOT_TOKEN:
-        return HTMLResponse("Invalid token", status_code=403)
-
+        return HTMLResponse("Forbidden", status_code=403)
     data = await request.json()
     update = Update.de_json(data, bot)
     await telegram_app.update_queue.put(update)
     return {"ok": True}
-
-@app.post("/api/download")
-async def api_download(request: Request):
-    try:
-        body = await request.json()
-        url = body.get("url")
-        if not url:
-            raise HTTPException(status_code=400, detail="No URL provided")
-
-        with YoutubeDL({'outtmpl': f"{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s"}) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-
-        name = os.path.basename(filename)
-        file_url = f"/downloads/{name}"
-
-        save_log({
-            "title": info.get("title"),
-            "file": name,
-            "url": file_url
-        })
-
-        return {
-            "success": True,
-            "file_url": file_url,
-            "title": info.get("title")
-        }
-
-    except Exception as e:
-        return {"success": False, "message": str(e)}
 
 @app.on_event("startup")
 async def startup():
     await telegram_app.initialize()
     await telegram_app.start()
     await bot.set_webhook(WEBHOOK_URL)
-    print("✅ Webhook set to", WEBHOOK_URL)
 
 @app.on_event("shutdown")
 async def shutdown():
     await telegram_app.stop()
 
-# === MAIN ENTRY ===
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
