@@ -1,122 +1,48 @@
-import os
-import json
-import requests
-import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-from starlette.responses import JSONResponse
-from starlette.middleware.cors import CORSMiddleware
+import os import json import logging import requests from fastapi import FastAPI, Request from fastapi.responses import HTMLResponse from fastapi.templating import Jinja2Templates from fastapi.staticfiles import StaticFiles from telegram import Bot, Update from telegram.constants import ParseMode from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes from download_and_upload import download_video, upload_to_fileio
 
-# === Config ===
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL", "https://yourdomain.com")
-WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
-LOG_FILE = "file_log.json"
+Logging
 
-# === Telegram App ===
-telegram_app: Application = Application.builder().token(TELEGRAM_TOKEN).build()
+logging.basicConfig(level=logging.INFO) logger = logging.getLogger(name)
 
-# === FastAPI Setup with Lifespan ===
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await telegram_app.initialize()
-    await telegram_app.start()
-    await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
-    print(f"✅ Webhook set to {WEBHOOK_URL}{WEBHOOK_PATH}")
-    yield
-    await telegram_app.stop()
+Config
 
-app = FastAPI(lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or "YOUR_TELEGRAM_TOKEN" BASE_URL = os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8000"
 
-# === Helpers ===
-def save_to_log(data):
-    try:
-        logs = []
-        if os.path.exists(LOG_FILE):
-            with open(LOG_FILE, "r") as f:
-                logs = json.load(f)
-        logs.append(data)
-        with open(LOG_FILE, "w") as f:
-            json.dump(logs, f, indent=2)
-    except Exception as e:
-        print("Log error:", e)
+FastAPI app
 
-def fake_download(link, format):
-    return {
-        "title": "Sample Video",
-        "thumbnail": "https://via.placeholder.com/400x200.png?text=Thumbnail",
-        "duration": "123",
-        "size": "5.4 MB",
-        "quality": "720p",
-        "file_url": "https://file.io/example",
-        "file_name": "video.mp4"
-    }
+app = FastAPI() templates = Jinja2Templates(directory="templates") app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# === Telegram Handlers ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Send me a link to download.")
+Telegram Bot
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    link = update.message.text.strip()
-    await update.message.reply_text("⏳ Processing your link...")
+bot = Bot(token=TELEGRAM_TOKEN) telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    result = fake_download(link, "video")
-    try:
-        file_data = requests.get(result["file_url"])
-        with open(result["file_name"], "wb") as f:
-            f.write(file_data.content)
+@app.get("/", response_class=HTMLResponse) async def home(request: Request): return templates.TemplateResponse("index.html", {"request": request})
 
-        with open(result["file_name"], "rb") as f:
-            await update.message.reply_video(
-                video=f,
-                caption=f"🎬 {result['title']} ({result['quality']}, {result['size']})"
-            )
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {str(e)}")
+@app.post("/webhook/{token}") async def webhook(token: str, request: Request): if token != TELEGRAM_TOKEN: return {"error": "Invalid token"} data = await request.json() update = Update.de_json(data, bot) await telegram_app.process_update(update) return {"status": "ok"}
 
-    save_to_log(result)
+@telegram_app.command("start") async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👋 Send me a video or audio link to download.")
 
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+@telegram_app.message_handler(filters.TEXT & ~filters.COMMAND) async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE): link = update.message.text chat_id = update.effective_chat.id msg = await update.message.reply_text("🔄 Processing your request...")
 
-# === FastAPI Routes ===
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    return "<h1>🚀 Social Downloader API is live</h1>"
+try:
+    video = download_video(link)
+    file_link = upload_to_fileio(video['file_path'])
 
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, telegram_app.bot)
-    await telegram_app.process_update(update)
-    return JSONResponse(content={"ok": True})
+    caption = f"<b>{video['title']}</b>\n"
+    caption += f"Duration: {video['duration']}s\n"
+    caption += f"Size: {round(video['filesize'] / 1024 / 1024, 2)} MB\n"
+    caption += f"Link: {video['webpage_url']}"
 
-@app.post("/api/process")
-async def api_process(request: Request):
-    data = await request.json()
-    link = data.get("link")
-    format = data.get("format", "video")
-    result = fake_download(link, format)
-    save_to_log(result)
-    return result
+    await context.bot.send_video(chat_id=chat_id, video=open(video['file_path'], 'rb'),
+                                 caption=caption, parse_mode=ParseMode.HTML)
 
-# === For Local Development ===
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 5000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    await msg.edit_text(f"✅ Done! Download via File.io: {file_link}")
+
+except Exception as e:
+    logger.error("Error processing video: %s", str(e))
+    await msg.edit_text("❌ Failed to process the video. Try another link.")
+
+@app.on_event("startup") async def startup(): webhook_url = f"{BASE_URL}/webhook/{TELEGRAM_TOKEN}" await telegram_app.bot.set_webhook(webhook_url) logger.info(f"✅ Webhook set to {webhook_url}") telegram_app.run_polling()  # Optional fallback
+
+if name == 'main': import uvicorn uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
