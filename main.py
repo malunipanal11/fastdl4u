@@ -5,14 +5,16 @@ import requests
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yt_dlp import YoutubeDL
+from fastapi import FastAPI, Request
+import uvicorn
 
-# Replace with your bot token
-BOT_TOKEN = "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw"
-
-# Ensure download folder exists
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set this in Render's environment
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+app = FastAPI()
+
+# Save logs of all downloaded files
 def save_log(data):
     log = []
     if os.path.exists("file_log.json"):
@@ -25,56 +27,107 @@ def save_log(data):
     with open("file_log.json", "w") as f:
         json.dump(log, f, indent=2)
 
+# Standard video download using yt-dlp
 def download_youtube(url):
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
-        'format': 'best',
+        'format': 'bestvideo+bestaudio/best',
+        'merge_output_format': 'mp4'
     }
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filepath = ydl.prepare_filename(info)
         return filepath, info.get("title")
 
+# Detect supported links
 def is_terabox_link(url):
-    return "terabox" in url
+    return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
 
-def is_twitter_link(url):
-    return "twitter.com" in url
+def is_supported_link(url):
+    supported_domains = [
+        "youtube.com", "youtu.be", "vimeo.com", "tiktok.com", 
+        "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"
+    ]
+    return any(domain in url for domain in supported_domains)
 
-def is_threads_link(url):
-    return "threads.net" in url
+# Terabox video resolver using unofficial API
+def resolve_terabox_video(url):
+    try:
+        api_url = "https://terabox-api.vercel.app/api"
+        response = requests.get(api_url, params={"link": url}, timeout=10)
+        data = response.json()
 
-def is_pinterest_link(url):
-    return "pinterest.com" in url
+        if not data.get("success") or "download_url" not in data:
+            raise Exception("Failed to resolve video")
 
+        file_url = data["download_url"]
+        title = data.get("title", "terabox_video")
+        ext = file_url.split(".")[-1].split("?")[0]
+        safe_title = re.sub(r"[^\w\-_. ]", "_", title)
+        filename = f"{safe_title}.{ext}"
+        filepath = os.path.join(DOWNLOAD_FOLDER, filename)
+
+        file_data = requests.get(file_url)
+        with open(filepath, "wb") as f:
+            f.write(file_data.content)
+
+        return filepath, title
+
+    except Exception:
+        return fallback_download(url)
+
+# Fallback if resolution fails
 def fallback_download(url):
-    # Replace this with your API logic for Terabox, Twitter, Threads, Pinterest
-    filename = re.sub(r'\W+', '_', url) + ".txt"
+    filename = re.sub(r'\W+', '_', url)[:50] + ".txt"
     path = os.path.join(DOWNLOAD_FOLDER, filename)
     with open(path, "w") as f:
         f.write(f"Manual download required: {url}")
     return path, "Manual Download"
 
+# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📥 Send me a video link (YouTube, Twitter, Terabox, Threads, Pinterest) and I will try to download it.")
+    await update.message.reply_text("📥 Send me a video link (YouTube, Vimeo, TikTok, SoundCloud, Reddit, Terabox, etc.) and I will try to download it.")
 
+# Handle messages (URLs)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.reply_text("⏳ Processing...")
+
     try:
-        if is_terabox_link(url) or is_twitter_link(url) or is_threads_link(url) or is_pinterest_link(url):
-            path, title = fallback_download(url)
-        else:
+        if is_terabox_link(url):
+            path, title = resolve_terabox_video(url)
+        elif is_supported_link(url):
             path, title = download_youtube(url)
+        else:
+            path, title = fallback_download(url)
 
         await update.message.reply_document(document=open(path, "rb"), filename=os.path.basename(path))
         save_log({"title": title, "file": os.path.basename(path), "url": url})
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# Set up bot
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, Bot(BOT_TOKEN))
+    await telegram_app.update_queue.put(update)
+    return {"ok": True}
+
+@app.on_event("startup")
+async def on_startup():
+    await telegram_app.initialize()
+    await telegram_app.start()
+    webhook_url = os.getenv("WEBHOOK_URL")
+    await Bot(BOT_TOKEN).set_webhook(webhook_url)
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await telegram_app.stop()
 
 if __name__ == "__main__":
-    app.run_polling()
+    uvicorn.run("telegram_media_downloader:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
