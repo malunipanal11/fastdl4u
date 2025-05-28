@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
 
     if WEBHOOK_URL:
         try:
-            await Bot(BOT_TOKEN).set_webhook(WEBHOOK_URL)
+            await Bot(BOT_TOKEN).set_webhook(f"{webhook_url}/webhook")
         except Exception as e:
             print(f"Webhook setup error: {e}")
 
