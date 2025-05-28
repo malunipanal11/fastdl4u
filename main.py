@@ -1,21 +1,28 @@
 import os
 import json
 import logging
-import threading
 import requests
+import asyncio
 from flask import Flask, request, jsonify, render_template
-import telebot
-from telebot.types import Update, InputFile
+from telegram import Update, InputFile
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-# === Secure Config ===
+# === ENV Configuration ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL")
-
-app = Flask(__name__)
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
 log_file = "file_log.json"
 
-# === Helpers ===
+# === Flask App ===
+app = Flask(__name__)
+telegram_app: Application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+# === Helper Functions ===
 def save_to_log(data):
     try:
         if os.path.exists(log_file):
@@ -31,43 +38,48 @@ def save_to_log(data):
         print("Log error:", e)
 
 def fake_download(link, format):
-    # Simulated download
+    # Simulated file details (replace with actual yt-dlp if needed)
     return {
         "title": "Sample Video",
         "thumbnail": "https://via.placeholder.com/400x200.png?text=Thumbnail",
         "duration": "123",
-        "size": "5.4",
+        "size": "5.4 MB",
         "quality": "720p",
         "file_url": "https://file.io/example",
         "file_name": "video.mp4"
     }
 
-# === Telegram Handlers ===
-@bot.message_handler(commands=["start"])
-def handle_start(message):
-    bot.send_message(message.chat.id, "👋 Send a social media link to download.")
+# === Telegram Bot Handlers ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Send me a social media link to download.")
 
-@bot.message_handler(func=lambda m: True)
-def handle_link(message):
-    chat_id = message.chat.id
-    link = message.text.strip()
-    bot.send_message(chat_id, "⏳ Processing...")
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    link = update.message.text.strip()
+    await update.message.reply_text("⏳ Processing your link...")
 
     result = fake_download(link, "video")
-
     try:
+        # Download file temporarily
         file_data = requests.get(result["file_url"])
         with open(result["file_name"], "wb") as f:
             f.write(file_data.content)
 
+        # Send the video
         with open(result["file_name"], "rb") as f:
-            bot.send_video(chat_id, f, caption=f"🎬 {result['title']}")
+            await update.message.reply_video(
+                video=f,
+                caption=f"🎬 {result['title']} ({result['quality']}, {result['size']})"
+            )
     except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Error downloading file: {str(e)}")
+        await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
     save_to_log(result)
 
-# === Web App ===
+# === Register Handlers ===
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+
+# === Flask Routes ===
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -82,10 +94,10 @@ def process_api():
     save_to_log(result)
     return jsonify(result)
 
-@app.route("/webhook/" + TELEGRAM_TOKEN, methods=["POST"])
-def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    bot.process_new_updates([update])
+@app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    asyncio.create_task(telegram_app.process_update(update))
     return "ok"
 
 # === Webhook Setup ===
@@ -93,14 +105,10 @@ def set_webhook():
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
     full_url = f"{WEBHOOK_URL}/webhook/{TELEGRAM_TOKEN}"
     res = requests.post(url, json={"url": full_url})
-    print("🔗 Webhook setup response:", res.json())
+    print("🔗 Webhook response:", res.json())
 
-# === App Start ===
-def start_bot():
-    print("🤖 Bot started.")
-    set_webhook()
-
+# === Main Entrypoint ===
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    threading.Thread(target=start_bot).start()
+    set_webhook()
     app.run(host="0.0.0.0", port=5000)
