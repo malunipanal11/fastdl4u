@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: telegram-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: BOT_TOKEN
+        value: YOUR_REAL_BOT_TOKEN
+      - key: PORT
+        value: 10000
+    autoDeploy: true
