@@ -1,3 +1,4 @@
+# download_and_upload.py
 import yt_dlp
 import requests
 import os
@@ -8,6 +9,7 @@ def download_video(link, audio_only=False):
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'noplaylist': True,
         'quiet': True,
+        'merge_output_format': 'mp4' if not audio_only else 'mp3',
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -27,4 +29,6 @@ def download_video(link, audio_only=False):
 def upload_to_fileio(file_path):
     with open(file_path, 'rb') as f:
         response = requests.post('https://file.io/?expires=1d', files={'file': f})
-        return response.json().get('link')
+        if response.status_code == 200:
+            return response.json().get('link')
+        return None
