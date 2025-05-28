@@ -1,92 +1,58 @@
+<!-- templates/index.html -->
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="bg-gray-900 text-white">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Social Media Downloader</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FastDL4U - Download Manager</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.3.2/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body class="bg-gray-100 text-gray-800 font-sans">
-  <div class="max-w-xl mx-auto p-6">
-    <h1 class="text-3xl font-bold mb-4 text-center">📥 Social Media Downloader</h1>
-
-    <form id="downloadForm" class="space-y-4">
-      <input
-        type="url"
-        name="url"
-        placeholder="Paste media link here..."
-        class="w-full p-3 border rounded-lg focus:outline-none focus:ring focus:border-blue-300"
-        required
-      />
-      <div class="flex gap-4">
-        <button
-          type="submit"
-          class="flex-1 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition"
-        >
-          Download
-        </button>
+<body class="p-6">
+  <div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold mb-4">📥 FastDL4U - Downloader</h1>
+    
+    <form id="downloadForm" class="mb-6">
+      <div class="flex items-center gap-4">
+        <input id="urlInput" name="url" type="url" required
+          placeholder="Paste media link here..."
+          class="flex-1 p-3 rounded-lg bg-gray-800 text-white border border-gray-700"/>
+        <button type="submit"
+          class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white font-semibold">Download</button>
       </div>
     </form>
 
-    <div id="status" class="mt-6 hidden p-4 bg-white rounded shadow">
-      <div class="mb-2 text-lg font-semibold">🔄 Processing...</div>
-      <progress id="progressBar" value="0" max="100" class="w-full h-3"></progress>
-      <div id="progressText" class="text-sm mt-2 text-gray-600">Starting...</div>
-    </div>
-
-    <div id="result" class="mt-6 hidden p-4 bg-white rounded shadow">
-      <h2 class="text-xl font-semibold mb-2">✅ File Ready</h2>
-      <video id="videoPlayer" controls class="w-full rounded"></video>
-      <div class="flex flex-wrap gap-2 mt-4">
-        <a id="playBtn" target="_blank" class="bg-green-500 text-white px-3 py-2 rounded hover:bg-green-600">▶️ Play</a>
-        <a id="downloadBtn" target="_blank" class="bg-blue-500 text-white px-3 py-2 rounded hover:bg-blue-600">⬇️ Download</a>
-        <button id="sendBtn" class="bg-purple-500 text-white px-3 py-2 rounded hover:bg-purple-600">📤 Send to Telegram</button>
-        <button id="deleteBtn" class="bg-red-500 text-white px-3 py-2 rounded hover:bg-red-600">🗑️ Delete</button>
-      </div>
+    <h2 class="text-xl font-semibold mb-2">📁 Downloads</h2>
+    <div class="space-y-4">
+      {% for file in files[::-1] %}
+        <div class="p-4 bg-gray-800 rounded-lg shadow flex items-center justify-between">
+          <div>
+            <h3 class="text-lg font-bold">{{ file.title }}</h3>
+            <p class="text-sm text-gray-400">{{ file.file }}</p>
+          </div>
+          <div class="flex gap-2">
+            <a href="/play/{{ file.file }}" class="bg-green-600 hover:bg-green-700 px-3 py-1 rounded text-sm">▶ Play</a>
+            <a href="{{ file.url }}" download class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm">⬇ Download</a>
+            <a href="/delete/{{ file.file }}" class="bg-red-600 hover:bg-red-700 px-3 py-1 rounded text-sm">🗑 Delete</a>
+          </div>
+        </div>
+      {% endfor %}
     </div>
   </div>
 
   <script>
-    const form = document.getElementById('downloadForm');
-    const statusBox = document.getElementById('status');
-    const resultBox = document.getElementById('result');
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const videoPlayer = document.getElementById('videoPlayer');
-    const playBtn = document.getElementById('playBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
-
-    form.addEventListener('submit', async (e) => {
+    const form = document.getElementById("downloadForm");
+    const input = document.getElementById("urlInput");
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const url = form.url.value.trim();
-      if (!url) return;
-
-      statusBox.classList.remove('hidden');
-      resultBox.classList.add('hidden');
-      progressBar.value = 10;
-      progressText.innerText = 'Downloading...';
-
-      try {
-        const res = await fetch('/api/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        });
-
-        const data = await res.json();
-        if (!data.success) throw new Error(data.message);
-
-        progressBar.value = 100;
-        progressText.innerText = 'Done!';
-        resultBox.classList.remove('hidden');
-
-        videoPlayer.src = data.file_url;
-        playBtn.href = data.file_url;
-        downloadBtn.href = data.file_url;
-
-      } catch (err) {
-        progressText.innerText = 'Error: ' + err.message;
-      }
+      const url = input.value;
+      const res = await fetch("/api/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      alert(data.success ? "✅ Download started!" : "❌ Error: " + data.message);
+      location.reload();
     });
   </script>
 </body>
