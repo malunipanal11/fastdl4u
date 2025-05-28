@@ -1,1 +1,5 @@
-[]
+{
+  "success": true,
+  "file_url": "https://file.io/xyz",
+  "file_name": "video.mp4"
+}
