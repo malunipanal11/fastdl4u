@@ -1,126 +1,106 @@
 import os
 import json
-import threading
-import asyncio
 import logging
-from flask import Flask, request, jsonify, render_template, send_file
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import yt_dlp
+import threading
 import requests
-from datetime import datetime
+from flask import Flask, request, jsonify, render_template
+import telebot
+from telebot.types import Update, InputFile
 
-# == Setup ==
-app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
-
+# === Secure Config ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://your-render-url.onrender.com")
-LOG_FILE = "file_log.json"
+WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-if not os.path.exists(LOG_FILE):
-    with open(LOG_FILE, 'w') as f:
-        json.dump([], f)
+app = Flask(__name__)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
+log_file = "file_log.json"
 
-# == Helper Functions ==
-def save_to_log(file_data):
-    with open(LOG_FILE, 'r+') as f:
-        data = json.load(f)
-        data.insert(0, file_data)
-        f.seek(0)
-        json.dump(data, f, indent=2)
+# === Helpers ===
+def save_to_log(data):
+    try:
+        if os.path.exists(log_file):
+            with open(log_file, "r") as f:
+                logs = json.load(f)
+        else:
+            logs = []
 
-def download_media(url, format):
-    ydl_opts = {
-        'format': 'bestaudio/best' if format == 'audio' else 'best',
-        'outtmpl': 'downloads/%(title).80s.%(ext)s',
-        'noplaylist': True,
-        'quiet': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3'
-        }] if format == 'audio' else [],
+        logs.append(data)
+        with open(log_file, "w") as f:
+            json.dump(logs, f, indent=2)
+    except Exception as e:
+        print("Log error:", e)
+
+def fake_download(link, format):
+    # Simulated download
+    return {
+        "title": "Sample Video",
+        "thumbnail": "https://via.placeholder.com/400x200.png?text=Thumbnail",
+        "duration": "123",
+        "size": "5.4",
+        "quality": "720p",
+        "file_url": "https://file.io/example",
+        "file_name": "video.mp4"
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        return {
-            'title': info.get('title'),
-            'duration': info.get('duration'),
-            'thumbnail': info.get('thumbnail'),
-            'filename': filename,
-            'ext': info.get('ext'),
-            'url': url,
-            'size': round(info.get('filesize', 0) / 1048576, 2),
-            'quality': info.get('format'),
-        }
 
-def upload_to_fileio(filepath):
-    with open(filepath, 'rb') as f:
-        res = requests.post("https://file.io", files={"file": f})
-    return res.json().get("link")
+# === Telegram Handlers ===
+@bot.message_handler(commands=["start"])
+def handle_start(message):
+    bot.send_message(message.chat.id, "👋 Send a social media link to download.")
 
-# == Flask Routes ==
-@app.route("/")
+@bot.message_handler(func=lambda m: True)
+def handle_link(message):
+    chat_id = message.chat.id
+    link = message.text.strip()
+    bot.send_message(chat_id, "⏳ Processing...")
+
+    result = fake_download(link, "video")
+
+    try:
+        file_data = requests.get(result["file_url"])
+        with open(result["file_name"], "wb") as f:
+            f.write(file_data.content)
+
+        with open(result["file_name"], "rb") as f:
+            bot.send_video(chat_id, f, caption=f"🎬 {result['title']}")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Error downloading file: {str(e)}")
+
+    save_to_log(result)
+
+# === Web App ===
+@app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
 
-@app.route("/file_log.json")
-def file_log():
-    return send_file(LOG_FILE)
-
 @app.route("/api/process", methods=["POST"])
-def process():
-    try:
-        data = request.get_json()
-        url = data['link']
-        fmt = data['format']
-        info = download_media(url, fmt)
-        file_url = upload_to_fileio(info['filename'])
-        info['file_url'] = file_url
-        save_to_log(info)
-        return jsonify(info)
-    except Exception as e:
-        logging.error("Processing error", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+def process_api():
+    data = request.get_json()
+    link = data.get("link")
+    format = data.get("format", "video")
 
-# == Telegram Bot Logic ==
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Send me a video/audio link and I'll download it for you!")
+    result = fake_download(link, format)
+    save_to_log(result)
+    return jsonify(result)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    chat_id = update.message.chat.id
-    try:
-        await update.message.reply_text("⏳ Processing your link...")
+@app.route("/webhook/" + TELEGRAM_TOKEN, methods=["POST"])
+def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    bot.process_new_updates([update])
+    return "ok"
 
-        info = download_media(url, 'video')
-        with open(info['filename'], 'rb') as f:
-            await context.bot.send_video(chat_id=chat_id, video=f, caption=info['title'])
+# === Webhook Setup ===
+def set_webhook():
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+    full_url = f"{WEBHOOK_URL}/webhook/{TELEGRAM_TOKEN}"
+    res = requests.post(url, json={"url": full_url})
+    print("🔗 Webhook setup response:", res.json())
 
-        # Store and upload
-        file_url = upload_to_fileio(info['filename'])
-        info['file_url'] = file_url
-        save_to_log(info)
+# === App Start ===
+def start_bot():
+    print("🤖 Bot started.")
+    set_webhook()
 
-    except Exception as e:
-        logging.error("Telegram bot error", exc_info=True)
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def bot_main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logging.info("🤖 Bot started.")
-    await application.run_polling()
-
-# == Launch Telegram Bot in Thread ==
-def run_bot():
-    asyncio.run(bot_main())
-
-threading.Thread(target=run_bot).start()
-
-# == Start Flask ==
 if __name__ == "__main__":
-    os.makedirs("downloads", exist_ok=True)
+    logging.basicConfig(level=logging.INFO)
+    threading.Thread(target=start_bot).start()
     app.run(host="0.0.0.0", port=5000)
