@@ -6,8 +6,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # must be set in your Render environment
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., https://yourapp.onrender.com/webhook
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
@@ -26,13 +27,15 @@ def save_log(data):
     with open("file_log.json", "w") as f:
         json.dump(log, f, indent=2)
 
-# Check if Terabox
+# Supported sites
 def is_terabox_link(url):
     return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
 
-# Supported sites
 def is_supported_link(url):
-    supported = ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"]
+    supported = [
+        "youtube.com", "youtu.be", "vimeo.com", "tiktok.com",
+        "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"
+    ]
     return any(domain in url for domain in supported)
 
 # Fallback TXT file
@@ -43,7 +46,7 @@ def fallback_download(url):
         f.write(f"Manual download required: {url}")
     return path, "Manual Download"
 
-# Download YouTube etc.
+# yt-dlp download
 def download_youtube(url):
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
@@ -78,13 +81,12 @@ def resolve_terabox_video(url):
 
         return filepath, title, file_url
     except Exception:
-        return fallback_download(url) + (None,)  # return (filepath, title, None)
+        return fallback_download(url) + (None,)  # (path, title, None)
 
-# Telegram /start
+# Telegram handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send a video link (YouTube, Terabox, etc.) to download.")
 
-# Handle messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.reply_text("⏳ Processing...")
@@ -102,20 +104,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# Telegram app setup
+# Telegram bot app
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Webhook route for Telegram
+# Telegram webhook receiver
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
-    update = Update.de_json(data, Bot(BOT_TOKEN))
+    update = Update.de_json(data, telegram_app.bot)  # ✅ Correct bot instance
     await telegram_app.update_queue.put(update)
     return {"ok": True}
 
-# API route for Terabox
+# Optional FastAPI API for resolving Terabox link directly
 @app.get("/api")
 async def api_resolver(link: str):
     try:
@@ -127,14 +129,14 @@ async def api_resolver(link: str):
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})
 
-# Lifespan handlers
+# Lifespan events
 @app.on_event("startup")
 async def on_startup():
     await telegram_app.initialize()
     await telegram_app.start()
     if WEBHOOK_URL:
         try:
-            await Bot(BOT_TOKEN).set_webhook(WEBHOOK_URL)
+            await telegram_app.bot.set_webhook(WEBHOOK_URL)
         except Exception as e:
             print(f"Webhook setup error: {e}")
 
@@ -142,6 +144,6 @@ async def on_startup():
 async def on_shutdown():
     await telegram_app.stop()
 
-# Run server
+# Run FastAPI server with uvicorn
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
