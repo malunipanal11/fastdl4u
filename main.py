@@ -7,9 +7,29 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+# FastAPI app with proper lifespan handling
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await telegram_app.initialize()
+    await telegram_app.start()
+
+    if WEBHOOK_URL:
+        try:
+            await Bot(BOT_TOKEN).set_webhook(WEBHOOK_URL)
+        except Exception as e:
+            print(f"Webhook setup error: {e}")
+
+    yield
+
+    await telegram_app.stop()
+
+app = FastAPI(lifespan=lifespan)
+
+# Save download logs
 def save_log(data):
     log = []
     if os.path.exists("file_log.json"):
@@ -22,6 +42,14 @@ def save_log(data):
     with open("file_log.json", "w") as f:
         json.dump(log, f, indent=2)
 
+# Check supported links
+def is_terabox_link(url): return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
+def is_supported_link(url): return any(domain in url for domain in [
+    "youtube.com", "youtu.be", "vimeo.com", "tiktok.com",
+    "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"
+])
+
+# Download using yt-dlp
 def download_youtube(url):
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
@@ -33,13 +61,7 @@ def download_youtube(url):
         filepath = ydl.prepare_filename(info)
         return filepath, info.get("title")
 
-def is_terabox_link(url):
-    return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
-
-def is_supported_link(url):
-    supported_domains = ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"]
-    return any(domain in url for domain in supported_domains)
-
+# Terabox support via unofficial API
 def resolve_terabox_video(url):
     try:
         api_url = "https://terabox-api.vercel.app/api"
@@ -47,7 +69,7 @@ def resolve_terabox_video(url):
         data = response.json()
 
         if not data.get("success") or "download_url" not in data:
-            raise Exception("Failed to resolve video")
+            raise Exception("Failed to resolve Terabox video")
 
         file_url = data["download_url"]
         title = data.get("title", "terabox_video")
@@ -61,10 +83,10 @@ def resolve_terabox_video(url):
             f.write(file_data.content)
 
         return filepath, title
-
-    except Exception:
+    except Exception as e:
         return fallback_download(url)
 
+# Fallback manual download
 def fallback_download(url):
     filename = re.sub(r'\W+', '_', url)[:50] + ".txt"
     path = os.path.join(DOWNLOAD_FOLDER, filename)
@@ -72,12 +94,15 @@ def fallback_download(url):
         f.write(f"Manual download required: {url}")
     return path, "Manual Download"
 
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send me a video link (YouTube, Vimeo, TikTok, SoundCloud, Reddit, Terabox, etc.) and I will try to download it.")
 
+# Handle incoming messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.reply_text("⏳ Processing...")
+
     try:
         if is_terabox_link(url):
             path, title = resolve_terabox_video(url)
@@ -91,21 +116,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
+# Telegram bot setup
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await telegram_app.initialize()
-    await telegram_app.start()
-    webhook_url = os.getenv("WEBHOOK_URL")
-    await Bot(BOT_TOKEN).set_webhook(webhook_url)
-    yield
-    await telegram_app.stop()
-
-app = FastAPI(lifespan=lifespan)
-
+# Webhook route
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -113,5 +129,6 @@ async def webhook(request: Request):
     await telegram_app.update_queue.put(update)
     return {"ok": True}
 
+# Local run
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
