@@ -1,20 +1,15 @@
-import os
-import json
-import re
-import requests
+import os, json, re, requests
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yt_dlp import YoutubeDL
 from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 import uvicorn
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set this in Render's environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-app = FastAPI()
-
-# Save logs of all downloaded files
 def save_log(data):
     log = []
     if os.path.exists("file_log.json"):
@@ -27,7 +22,6 @@ def save_log(data):
     with open("file_log.json", "w") as f:
         json.dump(log, f, indent=2)
 
-# Standard video download using yt-dlp
 def download_youtube(url):
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
@@ -39,18 +33,13 @@ def download_youtube(url):
         filepath = ydl.prepare_filename(info)
         return filepath, info.get("title")
 
-# Detect supported links
 def is_terabox_link(url):
     return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
 
 def is_supported_link(url):
-    supported_domains = [
-        "youtube.com", "youtu.be", "vimeo.com", "tiktok.com", 
-        "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"
-    ]
+    supported_domains = ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"]
     return any(domain in url for domain in supported_domains)
 
-# Terabox video resolver using unofficial API
 def resolve_terabox_video(url):
     try:
         api_url = "https://terabox-api.vercel.app/api"
@@ -76,7 +65,6 @@ def resolve_terabox_video(url):
     except Exception:
         return fallback_download(url)
 
-# Fallback if resolution fails
 def fallback_download(url):
     filename = re.sub(r'\W+', '_', url)[:50] + ".txt"
     path = os.path.join(DOWNLOAD_FOLDER, filename)
@@ -84,15 +72,12 @@ def fallback_download(url):
         f.write(f"Manual download required: {url}")
     return path, "Manual Download"
 
-# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send me a video link (YouTube, Vimeo, TikTok, SoundCloud, Reddit, Terabox, etc.) and I will try to download it.")
 
-# Handle messages (URLs)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.reply_text("⏳ Processing...")
-
     try:
         if is_terabox_link(url):
             path, title = resolve_terabox_video(url)
@@ -106,10 +91,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# Set up bot
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await telegram_app.initialize()
+    await telegram_app.start()
+    webhook_url = os.getenv("WEBHOOK_URL")
+    await Bot(BOT_TOKEN).set_webhook(webhook_url)
+    yield
+    await telegram_app.stop()
+
+app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -118,16 +113,5 @@ async def webhook(request: Request):
     await telegram_app.update_queue.put(update)
     return {"ok": True}
 
-@app.on_event("startup")
-async def on_startup():
-    await telegram_app.initialize()
-    await telegram_app.start()
-    webhook_url = os.getenv("WEBHOOK_URL")
-    await Bot(BOT_TOKEN).set_webhook(webhook_url)
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await telegram_app.stop()
-
 if __name__ == "__main__":
-    uvicorn.run("telegram_media_downloader:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
