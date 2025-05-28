@@ -2,9 +2,10 @@ import os
 import json
 import requests
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from telegram import Update, InputFile
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -12,18 +13,29 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
 from starlette.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
-# === Env Variables ===
+# === Config ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL", "https://yourdomain.com")
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 LOG_FILE = "file_log.json"
 
-# === FastAPI App ===
-app = FastAPI()
+# === Telegram App ===
+telegram_app: Application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+# === FastAPI Setup with Lifespan ===
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
+    print(f"✅ Webhook set to {WEBHOOK_URL}{WEBHOOK_PATH}")
+    yield
+    await telegram_app.stop()
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,10 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Telegram App ===
-telegram_app: Application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# === Helper Functions ===
+# === Helpers ===
 def save_to_log(data):
     try:
         logs = []
@@ -102,19 +111,12 @@ async def api_process(request: Request):
     data = await request.json()
     link = data.get("link")
     format = data.get("format", "video")
-
     result = fake_download(link, format)
     save_to_log(result)
     return result
 
-# === Main Entrypoint ===
-async def on_startup():
-    webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
-    await telegram_app.bot.set_webhook(webhook_url)
-    print(f"✅ Webhook set to: {webhook_url}")
-
-@app.on_event("startup")
-async def startup_event():
-    await telegram_app.initialize()
-    await telegram_app.start()
-    await on_startup()
+# === For Local Development ===
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 5000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
