@@ -1,13 +1,11 @@
 services:
   - type: web
-    name: telegram-bot
+    name: telegram-media-downloader
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    startCommand: python main.py
     envVars:
       - key: BOT_TOKEN
         value: 8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw
-      - key: PORT
-        value: 10000
-    autoDeploy: true
+      - key: WEBHOOK_URL
+        value: https://fastdl4u.onrender.com/webhook
