@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # must be set in Render
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
@@ -55,18 +55,18 @@ def download_youtube(url):
         filepath = ydl.prepare_filename(info)
     return filepath, info.get("title")
 
-# ✅ Updated working Terabox API
+# ✅ Working TeraBox API
 def resolve_terabox_video(url):
     try:
-        api_url = "https://teraboxdrivelink.vercel.app/api"
-        response = requests.get(api_url, params={"link": url}, timeout=15)
+        api_url = "https://pika-terabox-dl.vercel.app/"
+        response = requests.get(api_url, params={"url": url}, timeout=15)
         data = response.json()
 
-        if not data.get("success") or "download_url" not in data:
+        if not data.get("ok") or "downloadLink" not in data:
             raise Exception("Failed to resolve video")
 
-        file_url = data["download_url"]
-        title = data.get("title", "terabox_video")
+        file_url = data["downloadLink"]
+        title = data.get("filename", "terabox_video")
         ext = file_url.split(".")[-1].split("?")[0]
         safe_title = re.sub(r"[^\w\-_. ]", "_", title)
         filename = f"{safe_title}.{ext}"
