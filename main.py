@@ -29,11 +29,15 @@ def is_terabox_link(url):
     return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
 
 def is_supported_link(url):
-    supported = [
-        "youtube.com", "youtu.be", "vimeo.com", "tiktok.com",
-        "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"
-    ]
+    supported = ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"]
     return any(domain in url for domain in supported)
+
+def fallback_download(url):
+    filename = re.sub(r'\W+', '_', url)[:50] + ".txt"
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+    with open(path, "w") as f:
+        f.write(f"Manual download required: {url}")
+    return path, "Manual Download"
 
 def download_youtube(url):
     ydl_opts = {
@@ -50,6 +54,10 @@ def resolve_terabox_video(url):
     try:
         api_url = "https://terabox-api.vercel.app/api"
         response = requests.get(api_url, params={"link": url}, timeout=10)
+
+        if not response.ok or "application/json" not in response.headers.get("Content-Type", ""):
+            raise Exception("Terabox API error: Invalid response format.")
+
         data = response.json()
 
         if not data.get("success") or "download_url" not in data:
@@ -69,7 +77,7 @@ def resolve_terabox_video(url):
         return filepath, title, file_url
 
     except Exception as e:
-        raise Exception(str(e))
+        return fallback_download(url) + (None,)  # Returns (path, title, None)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send a video link (YouTube, Terabox, etc.) to download.")
@@ -84,13 +92,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif is_supported_link(url):
             path, title = download_youtube(url)
         else:
-            raise Exception("❌ Unsupported link format.")
+            path, title = fallback_download(url)
 
         await update.message.reply_document(document=open(path, "rb"), filename=os.path.basename(path))
         save_log({"title": title, "file": os.path.basename(path), "url": url})
-
     except Exception as e:
-        await update.message.reply_text(f"❌ {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
@@ -107,7 +114,10 @@ async def webhook(request: Request):
 async def api_resolver(link: str):
     try:
         _, title, file_url = resolve_terabox_video(link)
-        return JSONResponse({"success": True, "download_url": file_url, "title": title})
+        if file_url:
+            return JSONResponse({"success": True, "download_url": file_url, "title": title})
+        else:
+            return JSONResponse({"success": False, "error": "Manual download required"})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})
 
