@@ -7,13 +7,12 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # must be set in your Render environment
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 app = FastAPI()
 
-# Save logs
 def save_log(data):
     log = []
     if os.path.exists("file_log.json"):
@@ -26,24 +25,16 @@ def save_log(data):
     with open("file_log.json", "w") as f:
         json.dump(log, f, indent=2)
 
-# Check if Terabox
 def is_terabox_link(url):
     return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
 
-# Supported sites
 def is_supported_link(url):
-    supported = ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"]
+    supported = [
+        "youtube.com", "youtu.be", "vimeo.com", "tiktok.com",
+        "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"
+    ]
     return any(domain in url for domain in supported)
 
-# Fallback TXT file
-def fallback_download(url):
-    filename = re.sub(r'\W+', '_', url)[:50] + ".txt"
-    path = os.path.join(DOWNLOAD_FOLDER, filename)
-    with open(path, "w") as f:
-        f.write(f"Manual download required: {url}")
-    return path, "Manual Download"
-
-# Download YouTube etc.
 def download_youtube(url):
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
@@ -55,15 +46,14 @@ def download_youtube(url):
         filepath = ydl.prepare_filename(info)
     return filepath, info.get("title")
 
-# Updated Terabox resolver
 def resolve_terabox_video(url):
     try:
-        api_url = "https://api.terabox.app/api"
+        api_url = "https://terabox-api.vercel.app/api"
         response = requests.get(api_url, params={"link": url}, timeout=10)
         data = response.json()
 
         if not data.get("success") or "download_url" not in data:
-            return fallback_download(url) + (None,)
+            raise Exception("⚠️ Unable to extract download link from Terabox.")
 
         file_url = data["download_url"]
         title = data.get("title", "terabox_video")
@@ -77,15 +67,13 @@ def resolve_terabox_video(url):
             f.write(file_data.content)
 
         return filepath, title, file_url
-    except Exception as e:
-        print(f"[Terabox error] {e}")
-        return fallback_download(url) + (None,)
 
-# Telegram /start
+    except Exception as e:
+        raise Exception(str(e))
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send a video link (YouTube, Terabox, etc.) to download.")
 
-# Handle messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.reply_text("⏳ Processing...")
@@ -96,19 +84,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif is_supported_link(url):
             path, title = download_youtube(url)
         else:
-            path, title = fallback_download(url)
+            raise Exception("❌ Unsupported link format.")
 
         await update.message.reply_document(document=open(path, "rb"), filename=os.path.basename(path))
         save_log({"title": title, "file": os.path.basename(path), "url": url})
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# Telegram app setup
+    except Exception as e:
+        await update.message.reply_text(f"❌ {str(e)}")
+
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Webhook route for Telegram
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -116,19 +103,14 @@ async def webhook(request: Request):
     await telegram_app.update_queue.put(update)
     return {"ok": True}
 
-# API route for Terabox
 @app.get("/api")
 async def api_resolver(link: str):
     try:
         _, title, file_url = resolve_terabox_video(link)
-        if file_url:
-            return JSONResponse({"success": True, "download_url": file_url, "title": title})
-        else:
-            return JSONResponse({"success": False, "error": "Manual download required"})
+        return JSONResponse({"success": True, "download_url": file_url, "title": title})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})
 
-# Startup and Shutdown hooks
 @app.on_event("startup")
 async def on_startup():
     await telegram_app.initialize()
@@ -143,6 +125,5 @@ async def on_startup():
 async def on_shutdown():
     await telegram_app.stop()
 
-# Run server
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
