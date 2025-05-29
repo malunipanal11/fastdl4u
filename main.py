@@ -1,4 +1,3 @@
-
 import os, json, re, requests
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -14,7 +13,6 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 app = FastAPI()
 
-# Save logs
 def save_log(data):
     log = []
     if os.path.exists("file_log.json"):
@@ -27,16 +25,13 @@ def save_log(data):
     with open("file_log.json", "w") as f:
         json.dump(log, f, indent=2)
 
-# Check Terabox
 def is_terabox_link(url):
     return any(domain in url for domain in ["terabox.com", "1024terabox.com"])
 
-# Supported video platforms
 def is_supported_link(url):
     supported = ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "soundcloud.com", "dailymotion.com", "twitch.tv", "reddit.com"]
     return any(domain in url for domain in supported)
 
-# Fallback text
 def fallback_download(url):
     filename = re.sub(r'\W+', '_', url)[:50] + ".txt"
     path = os.path.join(DOWNLOAD_FOLDER, filename)
@@ -44,7 +39,6 @@ def fallback_download(url):
         f.write(f"Manual download required: {url}")
     return path, "Manual Download"
 
-# YouTube & others
 def download_youtube(url):
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_FOLDER}/%(title).200B.%(ext)s',
@@ -56,18 +50,18 @@ def download_youtube(url):
         filepath = ydl.prepare_filename(info)
     return filepath, info.get("title")
 
-# âœ… Working TeraBox API
+# ✅ Updated Terabox resolver using public API
 def resolve_terabox_video(url):
     try:
-        api_url = "https://pika-terabox-dl.vercel.app/"
-        response = requests.get(api_url, params={"url": url}, timeout=15)
+        api_url = "https://terabox-api.vercel.app/api"
+        response = requests.get(api_url, params={"link": url}, timeout=15)
         data = response.json()
 
-        if not data.get("ok") or "downloadLink" not in data:
-            raise Exception("Failed to resolve video")
+        if not data.get("success") or "download_url" not in data:
+            raise Exception("API returned no download URL")
 
-        file_url = data["downloadLink"]
-        title = data.get("filename", "terabox_video")
+        file_url = data["download_url"]
+        title = data.get("title", "terabox_video")
         ext = file_url.split(".")[-1].split("?")[0]
         safe_title = re.sub(r"[^\w\-_. ]", "_", title)
         filename = f"{safe_title}.{ext}"
@@ -84,12 +78,12 @@ def resolve_terabox_video(url):
 
 # Telegram /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ðŸ“¥ Send a video link (YouTube, Terabox, etc.) to download.")
+    await update.message.reply_text("📥 Send a video link (YouTube, Terabox, etc.) to download.")
 
 # Telegram message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    await update.message.reply_text("â³ Processing...")
+    await update.message.reply_text("⏳ Processing...")
 
     try:
         if is_terabox_link(url):
@@ -102,14 +96,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(document=open(path, "rb"), filename=os.path.basename(path))
         save_log({"title": title, "file": os.path.basename(path), "url": url})
     except Exception as e:
-        await update.message.reply_text(f"âŒ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# Telegram app
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Telegram webhook endpoint
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -117,7 +109,6 @@ async def webhook(request: Request):
     await telegram_app.update_queue.put(update)
     return {"ok": True}
 
-# API endpoint for link resolver
 @app.get("/api")
 async def api_resolver(link: str):
     try:
@@ -129,7 +120,6 @@ async def api_resolver(link: str):
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})
 
-# App lifecycle
 @app.on_event("startup")
 async def on_startup():
     await telegram_app.initialize()
@@ -144,6 +134,5 @@ async def on_startup():
 async def on_shutdown():
     await telegram_app.stop()
 
-# Run Uvicorn
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
