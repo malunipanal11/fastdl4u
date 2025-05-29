@@ -1,3 +1,4 @@
+
 import os, json, re, requests
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -55,7 +56,7 @@ def download_youtube(url):
         filepath = ydl.prepare_filename(info)
     return filepath, info.get("title")
 
-# ✅ Working TeraBox API
+# âœ… Working TeraBox API
 def resolve_terabox_video(url):
     try:
         api_url = "https://pika-terabox-dl.vercel.app/"
@@ -83,12 +84,12 @@ def resolve_terabox_video(url):
 
 # Telegram /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📥 Send a video link (YouTube, Terabox, etc.) to download.")
+    await update.message.reply_text("ðŸ“¥ Send a video link (YouTube, Terabox, etc.) to download.")
 
 # Telegram message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    await update.message.reply_text("⏳ Processing...")
+    await update.message.reply_text("â³ Processing...")
 
     try:
         if is_terabox_link(url):
@@ -101,7 +102,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(document=open(path, "rb"), filename=os.path.basename(path))
         save_log({"title": title, "file": os.path.basename(path), "url": url})
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"âŒ Error: {str(e)}")
 
 # Telegram app
 telegram_app = Application.builder().token(BOT_TOKEN).build()
