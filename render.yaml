@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: telegram-mega-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn bot.main:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: BOT_TOKEN
+        value: YOUR_BOT_TOKEN
+      - key: ADMIN_ID
+        value: YOUR_ADMIN_ID
+      - key: MEGA_EMAIL
+        value: YOUR_MEGA_EMAIL
+      - key: MEGA_PASSWORD
+        value: YOUR_MEGA_PASSWORD
