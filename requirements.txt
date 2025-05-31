@@ -1,3 +1,5 @@
-python-telegram-bot==20.3
+aiogram==2.25.2
 requests
+aiohttp
 python-dotenv
+beautifulsoup4
