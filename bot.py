@@ -6,11 +6,10 @@ import asyncio
 from config import BOT_TOKEN, ADMIN_IDS, EXPIRE_COMMANDS
 from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
-print("🚀 bot.py loaded")
-
-router = Router()
+router = Router()  # <-- Only the router, not Dispatcher or Bot
 
 
+# --- Button layouts ---
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
@@ -25,9 +24,9 @@ def get_user_controls(file_id):
     ])
 
 
+# --- /start command ---
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    print(f"🎯 /start handler called by user {message.from_user.id}")
     is_admin = message.from_user.id in ADMIN_IDS
     text = "👋 Welcome! Use the menu or send a command."
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -44,6 +43,7 @@ async def cmd_start(message: Message):
     await message.answer(text, reply_markup=kb)
 
 
+# --- /img /vid /aud commands ---
 @router.message(Command("img"))
 async def handle_img(message: Message):
     await send_random_file(message, "images")
@@ -70,10 +70,11 @@ async def send_random_file(message: Message, category: str):
     await asyncio.sleep(EXPIRE_COMMANDS.get(category[:-1], 600))
     try:
         await sent.delete()
-    except Exception as e:
-        print(f"❗Error deleting message: {e}")
+    except:
+        pass
 
 
+# --- /get <code> ---
 @router.message(F.text.startswith("/get "))
 async def cmd_get_code(message: Message):
     code = message.text.split("/get ")[1].strip()
@@ -92,6 +93,7 @@ async def cmd_get_code(message: Message):
         pass
 
 
+# --- Admin-only: /secret to view secret files ---
 @router.message(Command("secret"))
 async def list_secret(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -108,6 +110,7 @@ async def list_secret(message: Message):
         await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
 
 
+# --- Callback handler ---
 @router.callback_query(F.data)
 async def callbacks(call: CallbackQuery):
     action, file_id = call.data.split("_", 1)
@@ -120,12 +123,6 @@ async def callbacks(call: CallbackQuery):
         await call.message.answer("🔽 Downloading...")
 
 
-# ✅ Fallback to debug unhandled messages
-@router.message()
-async def catch_all(message: Message):
-    print(f"👋 Received a message: {message.text}")
-    await message.answer(f"You said: {message.text}")
-
-
+# --- Register Handlers ---
 def register_handlers(dp):
     dp.include_router(router)
