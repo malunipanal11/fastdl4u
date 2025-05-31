@@ -130,3 +130,6 @@ async def callbacks(call: CallbackQuery):
 # --- Main entry ---
 async def main():
     await dp.start_polling(bot)
+    
+def register_handlers(dispatcher: Dispatcher):
+    dispatcher.include_router(router)
