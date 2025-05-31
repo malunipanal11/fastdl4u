@@ -40,6 +40,18 @@ def register_handlers(dp):
             ])
         await message.answer(text, reply_markup=kb)
 
+    @router.message(Command("img"))
+    async def handle_img(message: Message):
+        await send_random_file(message, "images")
+
+    @router.message(Command("vid"))
+    async def handle_vid(message: Message):
+        await send_random_file(message, "videos")
+
+    @router.message(Command("aud"))
+    async def handle_aud(message: Message):
+        await send_random_file(message, "audios")
+
     async def send_random_file(message: Message, category: str):
         file = get_random_file(category)
         if not file:
@@ -52,18 +64,6 @@ def register_handlers(dp):
             await sent.delete()
         except:
             pass
-
-    @router.message(Command("img"))
-    async def handle_img(message: Message):
-        await send_random_file(message, "images")
-
-    @router.message(Command("vid"))
-    async def handle_vid(message: Message):
-        await send_random_file(message, "videos")
-
-    @router.message(Command("aud"))
-    async def handle_aud(message: Message):
-        await send_random_file(message, "audios")
 
     @router.message(F.text.startswith("/get "))
     async def cmd_get_code(message: Message):
@@ -98,8 +98,16 @@ def register_handlers(dp):
     async def callbacks(call: CallbackQuery):
         data = call.data
 
-        # Simple command buttons
-        if "_" not in data:
+        if "_" in data:
+            action, file_id = data.split("_", 1)
+            if action == "delete" and call.from_user.id in ADMIN_IDS:
+                delete_file(file_id)
+                await call.message.delete()
+            elif action == "play":
+                await call.message.answer(call.message.text)
+            elif action == "download":
+                await call.message.answer("🔽 Downloading...")
+        else:
             if data == "img":
                 await send_random_file(call.message, "images")
             elif data == "vid":
@@ -107,26 +115,10 @@ def register_handlers(dp):
             elif data == "aud":
                 await send_random_file(call.message, "audios")
             elif data == "addfile":
-                await call.message.answer("➕ Add file feature coming soon.")
+                await call.message.answer("📤 Please send a file to upload.")
             elif data == "addsecret":
-                await call.message.answer("🔒 Add secret feature coming soon.")
+                await call.message.answer("🔐 Send your secret content.")
             elif data == "addlink":
-                await call.message.answer("🔗 Add link feature coming soon.")
-            return
-
-        # Action with ID buttons
-        try:
-            action, file_id = data.split("_", 1)
-        except ValueError:
-            await call.message.answer("Invalid action.")
-            return
-
-        if action == "delete" and call.from_user.id in ADMIN_IDS:
-            delete_file(file_id)
-            await call.message.delete()
-        elif action == "play":
-            await call.message.answer(call.message.text)
-        elif action == "download":
-            await call.message.answer("🔽 Downloading...")
+                await call.message.answer("🔗 Send the link to store.")
 
     dp.include_router(router)
