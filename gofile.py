@@ -1,62 +1,44 @@
 import requests
-import os
-import random
-import string
-import json
+from io import BytesIO
 
-GOFILE_API = "https://api.gofile.io"
-UPLOAD_FOLDER = "storage"  # Local temp storage before upload
+# Replace with your Gofile API token or leave blank if public
+API_TOKEN = None
 
-# Mock database
-FILE_DB = {}
+# In-memory store for uploaded files by category
+uploaded_files = {
+    "images": [],
+    "videos": [],
+    "audios": [],
+    "files": []
+}
 
-# Create upload folder if not exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+def upload_to_gofile(file_bytes: BytesIO, filename: str, category: str):
+    response = requests.get("https://api.gofile.io/getServer")
+    server = response.json()["data"]["server"]
 
-def generate_code(length=6):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-def upload_to_gofile(filepath, category="images"):
-    """Uploads file to Gofile under the appropriate folder and returns (url, file_id)"""
-    with open(filepath, 'rb') as f:
-        response = requests.post(f"{GOFILE_API}/uploadFile", files={"file": f})
-    data = response.json()
-    if not data["status"] == "ok":
-        raise Exception("Failed to upload to Gofile")
-    file_url = data["data"]["downloadPage"]
-    file_id = data["data"]["fileId"]
-
-    # Store metadata
-    FILE_DB[file_id] = {
-        "id": file_id,
-        "url": file_url,
-        "category": category,
-        "code": generate_code() if category == "secret" else None
+    files = {
+        "file": (filename, file_bytes)
     }
 
-    return file_url, file_id
+    data = {
+        "token": API_TOKEN
+    } if API_TOKEN else {}
 
-def get_random_file(category="images"):
-    """Returns a random file dict from a specific category"""
-    files = [f for f in FILE_DB.values() if f["category"] == category]
-    return random.choice(files) if files else None
+    upload_url = f"https://{server}.gofile.io/uploadFile"
+    r = requests.post(upload_url, files=files, data=data)
+    result = r.json()
 
-def get_file_by_code(code):
-    """Return file by secret code"""
-    for f in FILE_DB.values():
-        if f.get("code") == code:
-            return f
-    return None
+    if result["status"] == "ok":
+        file_data = {
+            "name": filename,
+            "url": result["data"]["downloadPage"],
+            "code": result["data"]["code"]
+        }
+        uploaded_files[category].append(file_data)
+        return file_data["url"], file_data["code"]
+    else:
+        raise Exception("Upload failed")
 
-def delete_file(file_id):
-    """Delete file from local and Gofile (placeholder)"""
-    # Gofile does not offer public delete API without account tokens
-    if file_id in FILE_DB:
-        del FILE_DB[file_id]
 
-def list_files():
-    """Returns all stored file metadata"""
-    return FILE_DB
-
-def get_all_files_by_type(category="images"):
-    return [f for f in FILE_DB.values() if f["category"] == category]
+def get_files_by_type(category: str):
+    return uploaded_files.get(category, [])
