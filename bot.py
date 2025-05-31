@@ -1,124 +1,132 @@
-from aiogram import Router, types, F
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart, Command
-from aiogram.exceptions import TelegramBadRequest
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
 import asyncio
 import os
-import random
 
-from config import ADMIN_IDS, EXPIRE_COMMANDS
-from gofile import upload_to_gofile, list_files, delete_file, get_random_file
-from handlers import save_file_metadata, get_file_by_code, get_all_files_by_type
+from config import BOT_TOKEN, ADMIN_IDS, EXPIRE_COMMANDS
+from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
 router = Router()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+dp.include_router(router)
 
-def admin_controls(file_id):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+
+# --- Button layouts ---
+def get_admin_controls(file_id):
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
          InlineKeyboardButton(text="📥 Download", callback_data=f"download_{file_id}"),
          InlineKeyboardButton(text="❌ Delete", callback_data=f"delete_{file_id}")]
     ])
-    return kb
 
-def user_controls(file_id):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+
+def get_user_controls(file_id):
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")]
     ])
-    return kb
 
-@router.message(CommandStart())
-async def start_handler(message: types.Message):
+
+# --- /start command ---
+@router.message(Command("start"))
+async def cmd_start(message: Message):
     is_admin = message.from_user.id in ADMIN_IDS
-    commands = ["/addfile", "/addsecret", "/addlink", "/link", "/secret", "/img", "/vid", "/aud"] if is_admin else ["/img", "/vid", "/aud"]
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(*[types.KeyboardButton(c) for c in commands])
-    await message.answer("👋 Welcome! Choose a command below:", reply_markup=kb)
+    text = "👋 Welcome! Use the menu or send a command."
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🖼 Images", callback_data="img"),
+         InlineKeyboardButton(text="🎞 Videos", callback_data="vid"),
+         InlineKeyboardButton(text="🎧 Audio", callback_data="aud")]
+    ])
+    if is_admin:
+        kb.inline_keyboard.append([
+            InlineKeyboardButton(text="➕ Add File", callback_data="addfile"),
+            InlineKeyboardButton(text="🔒 Add Secret", callback_data="addsecret"),
+            InlineKeyboardButton(text="🔗 Add Link", callback_data="addlink"),
+        ])
+    await message.answer(text, reply_markup=kb)
 
-@router.message(Command("addfile"))
-async def addfile_handler(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return await message.answer("❌ Unauthorized.")
-    await message.answer("📤 Send up to 100 media files to upload and categorize.")
 
-@router.message(Command("addsecret"))
-async def addsecret_handler(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return await message.answer("❌ Unauthorized.")
-    await message.answer("🔒 Send secret files for permanent access.")
+# --- /img /vid /aud commands ---
+@router.message(Command("img"))
+async def handle_img(message: Message):
+    await send_random_file(message, "images")
 
-@router.message(F.content_type.in_({"photo", "video", "audio"}))
-async def handle_media(message: types.Message):
-    if message.from_user.id in ADMIN_IDS:
-        file = message.photo[-1] if message.photo else message.video or message.audio
-        if file:
-            category = "images" if message.photo else "videos" if message.video else "audios"
-            path = await file.download()
-            gofile_url, file_id = upload_to_gofile(path.name, category)
-            save_file_metadata(file_id, gofile_url, category, message.from_user.id)
-            await message.answer(f"✅ Uploaded: {gofile_url}")
-            os.remove(path.name)
 
-@router.message(Command(["img", "vid", "aud"]))
-async def send_random_handler(message: types.Message):
-    category = message.text[1:] + "s"
+@router.message(Command("vid"))
+async def handle_vid(message: Message):
+    await send_random_file(message, "videos")
+
+
+@router.message(Command("aud"))
+async def handle_aud(message: Message):
+    await send_random_file(message, "audios")
+
+
+async def send_random_file(message: Message, category: str):
     file = get_random_file(category)
     if not file:
-        return await message.answer("⚠️ No files found.")
-    kb = admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else user_controls(file["id"])
+        await message.answer("No files found.")
+        return
+
+    kb = get_admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else get_user_controls(file["id"])
     sent = await message.answer(file["url"], reply_markup=kb)
-    delay = EXPIRE_COMMANDS.get(message.text[1:], 600)
-    await asyncio.sleep(delay)
+    await asyncio.sleep(EXPIRE_COMMANDS.get(category[:-1], 600))
     try:
         await sent.delete()
-    except TelegramBadRequest:
+    except:
         pass
 
+
+# --- /get <code> ---
 @router.message(F.text.startswith("/get "))
-async def get_by_code_handler(message: types.Message):
+async def cmd_get_code(message: Message):
     code = message.text.split("/get ")[1].strip()
     file = get_file_by_code(code)
     if not file:
-        return await message.answer("❌ Invalid code.")
-    kb = user_controls(file["id"])
+        await message.answer("Invalid code.")
+        return
+
+    kb = get_user_controls(file["id"])
     sent = await message.answer(file["url"], reply_markup=kb)
     await asyncio.sleep(EXPIRE_COMMANDS["code"])
     try:
         await sent.delete()
         await message.delete()
-    except TelegramBadRequest:
+    except:
         pass
 
+
+# --- Admin-only: /secret to view secret files ---
 @router.message(Command("secret"))
-async def list_secret_handler(message: types.Message):
+async def list_secret(message: Message):
     if message.from_user.id not in ADMIN_IDS:
-        return await message.answer("❌ Unauthorized.")
+        await message.answer("You are not authorized.")
+        return
+
     files = get_all_files_by_type("secret")
     if not files:
-        return await message.answer("ℹ️ No secret files.")
+        await message.answer("No secret files.")
+        return
+
     for file in files:
-        kb = admin_controls(file["id"])
+        kb = get_admin_controls(file["id"])
         await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
 
-@router.message(Command("addlink"))
-async def add_link_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return await message.answer("❌ Unauthorized.")
-    await message.answer("🔗 Send a link (YouTube, Facebook, etc.) to auto-categorize.")
 
-@router.message(Command("link"))
-async def list_links_handler(message: types.Message):
-    await message.answer("📦 List of links - [Feature In Progress]")
-
-@router.callback_query(F.data.contains("_"))
-async def callback_handler(callback: types.CallbackQuery):
-    action, file_id = callback.data.split("_", 1)
-    if action == "delete" and callback.from_user.id in ADMIN_IDS:
+# --- Callback handler ---
+@router.callback_query(F.data)
+async def callbacks(call: CallbackQuery):
+    action, file_id = call.data.split("_", 1)
+    if action == "delete" and call.from_user.id in ADMIN_IDS:
         delete_file(file_id)
-        await callback.message.delete()
+        await call.message.delete()
     elif action == "play":
-        await callback.message.answer(callback.message.text)
-    elif action == "download" and callback.from_user.id in ADMIN_IDS:
-        await callback.message.answer("⬇️ Downloading file...")
+        await call.message.answer(call.message.text)
+    elif action == "download":
+        await call.message.answer("🔽 Downloading...")
 
-def register_handlers(dp):
-    dp.include_router(router)
+
+# --- Main entry ---
+async def main():
+    await dp.start_polling(bot)
