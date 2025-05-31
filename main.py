@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -6,41 +7,30 @@ from aiogram.types import Update
 from contextlib import asynccontextmanager
 
 from bot import register_handlers
+from config import BOT_TOKEN, WEBHOOK_URL
 
-# Load environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", 8000))
+# Logging
+logging.basicConfig(level=logging.INFO)
 
-print("🔐 BOT_TOKEN:", BOT_TOKEN)
-print("🌐 WEBHOOK_URL:", WEBHOOK_URL)
-
-# Setup bot and dispatcher
+# Setup
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
-# Register all handlers
 register_handlers(dp)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await bot.set_webhook(WEBHOOK_URL)
-    print("✅ Webhook set to:", WEBHOOK_URL)
+    logging.info(f"✅ Webhook set to: {WEBHOOK_URL}")
     yield
     await bot.delete_webhook()
-    print("🛑 Webhook deleted.")
+    logging.info("🛑 Webhook deleted.")
 
-# FastAPI app
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     update_data = await request.json()
     update = Update.model_validate(update_data)
-    print("📩 Received update:", update_data)
+    logging.info(f"📩 Received update: {update_data}")
     await dp.feed_update(bot, update)
-    return {"ok": True}  # ✅ Fixed the typo here
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT)
+    return {"ok": True}
