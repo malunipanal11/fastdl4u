@@ -1,5 +1,0 @@
-fastapi
-uvicorn
-mega.py
-tenacity>=8.2.2
-pycryptodome
