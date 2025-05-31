@@ -1,15 +1,17 @@
 import requests
 from io import BytesIO
+import uuid
 
-# Replace with your Gofile API token or leave blank if public
 API_TOKEN = None
 
-# In-memory store for uploaded files by category
+# In-memory store
 uploaded_files = {
     "images": [],
     "videos": [],
     "audios": [],
-    "files": []
+    "files": [],
+    "secret": [],
+    "links": []
 }
 
 def upload_to_gofile(file_bytes: BytesIO, filename: str, category: str):
@@ -30,6 +32,7 @@ def upload_to_gofile(file_bytes: BytesIO, filename: str, category: str):
 
     if result["status"] == "ok":
         file_data = {
+            "id": str(uuid.uuid4()),
             "name": filename,
             "url": result["data"]["downloadPage"],
             "code": result["data"]["code"]
@@ -39,6 +42,43 @@ def upload_to_gofile(file_bytes: BytesIO, filename: str, category: str):
     else:
         raise Exception("Upload failed")
 
+def add_secret(text: str):
+    code = str(uuid.uuid4())[:8]
+    item = {
+        "id": str(uuid.uuid4()),
+        "type": "secret",
+        "text": text,
+        "code": code,
+        "url": f"🔒 Secret: {text}",
+    }
+    uploaded_files["secret"].append(item)
+    return item["url"], code
 
-def get_files_by_type(category: str):
+def add_link(link: str):
+    code = str(uuid.uuid4())[:8]
+    item = {
+        "id": str(uuid.uuid4()),
+        "type": "link",
+        "url": link,
+        "code": code
+    }
+    uploaded_files["links"].append(item)
+    return item["url"], code
+
+def get_random_file(category: str):
+    from random import choice
+    return choice(uploaded_files.get(category, [])) if uploaded_files.get(category) else None
+
+def get_file_by_code(code: str):
+    for cat_files in uploaded_files.values():
+        for file in cat_files:
+            if file.get("code") == code:
+                return file
+    return None
+
+def get_all_files_by_type(category: str):
     return uploaded_files.get(category, [])
+
+def delete_file(file_id: str):
+    for category in uploaded_files:
+        uploaded_files[category] = [f for f in uploaded_files[category] if f["id"] != file_id]
