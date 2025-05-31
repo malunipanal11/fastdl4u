@@ -3,3 +3,4 @@ aiogram==3.2.0
 uvicorn
 httpx
 python-dotenv
+requests
