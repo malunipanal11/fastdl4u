@@ -1,5 +1,5 @@
-aiogram==2.25.2
-requests
-aiohttp
+fastapi
+aiogram==3.2.0
+uvicorn
+httpx
 python-dotenv
-beautifulsoup4
