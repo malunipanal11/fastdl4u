@@ -6,6 +6,7 @@ import asyncio
 from config import BOT_TOKEN, ADMIN_IDS, EXPIRE_COMMANDS
 from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
+# --- Button layouts ---
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
@@ -18,6 +19,7 @@ def get_user_controls(file_id):
         [InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")]
     ])
 
+# --- Register all handlers ---
 def register_handlers(dp):
     router = Router()
 
@@ -38,6 +40,19 @@ def register_handlers(dp):
             ])
         await message.answer(text, reply_markup=kb)
 
+    async def send_random_file(message: Message, category: str):
+        file = get_random_file(category)
+        if not file:
+            await message.answer("No files found.")
+            return
+        kb = get_admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else get_user_controls(file["id"])
+        sent = await message.answer(file["url"], reply_markup=kb)
+        await asyncio.sleep(EXPIRE_COMMANDS.get(category[:-1], 600))
+        try:
+            await sent.delete()
+        except:
+            pass
+
     @router.message(Command("img"))
     async def handle_img(message: Message):
         await send_random_file(message, "images")
@@ -49,20 +64,6 @@ def register_handlers(dp):
     @router.message(Command("aud"))
     async def handle_aud(message: Message):
         await send_random_file(message, "audios")
-
-    async def send_random_file(message: Message, category: str):
-        file = get_random_file(category)
-        if not file:
-            print(f"❌ No file found for category: {category}")
-            await message.answer("No files found.")
-            return
-        kb = get_admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else get_user_controls(file["id"])
-        sent = await message.answer(file["url"], reply_markup=kb)
-        await asyncio.sleep(EXPIRE_COMMANDS.get(category[:-1], 600))
-        try:
-            await sent.delete()
-        except:
-            pass
 
     @router.message(F.text.startswith("/get "))
     async def cmd_get_code(message: Message):
@@ -95,7 +96,31 @@ def register_handlers(dp):
 
     @router.callback_query(F.data)
     async def callbacks(call: CallbackQuery):
-        action, file_id = call.data.split("_", 1)
+        data = call.data
+
+        # Simple command buttons
+        if "_" not in data:
+            if data == "img":
+                await send_random_file(call.message, "images")
+            elif data == "vid":
+                await send_random_file(call.message, "videos")
+            elif data == "aud":
+                await send_random_file(call.message, "audios")
+            elif data == "addfile":
+                await call.message.answer("➕ Add file feature coming soon.")
+            elif data == "addsecret":
+                await call.message.answer("🔒 Add secret feature coming soon.")
+            elif data == "addlink":
+                await call.message.answer("🔗 Add link feature coming soon.")
+            return
+
+        # Action with ID buttons
+        try:
+            action, file_id = data.split("_", 1)
+        except ValueError:
+            await call.message.answer("Invalid action.")
+            return
+
         if action == "delete" and call.from_user.id in ADMIN_IDS:
             delete_file(file_id)
             await call.message.delete()
