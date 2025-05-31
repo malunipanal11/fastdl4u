@@ -6,8 +6,8 @@ import asyncio
 from config import BOT_TOKEN, ADMIN_IDS, EXPIRE_COMMANDS
 from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
-router = Router()  # <-- Only the router, not Dispatcher or Bot
-
+router = Router()  # Define router
+_router_registered = False  # Prevent double registration
 
 # --- Button layouts ---
 def get_admin_controls(file_id):
@@ -17,12 +17,10 @@ def get_admin_controls(file_id):
          InlineKeyboardButton(text="❌ Delete", callback_data=f"delete_{file_id}")]
     ])
 
-
 def get_user_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")]
     ])
-
 
 # --- /start command ---
 @router.message(Command("start"))
@@ -42,22 +40,18 @@ async def cmd_start(message: Message):
         ])
     await message.answer(text, reply_markup=kb)
 
-
 # --- /img /vid /aud commands ---
 @router.message(Command("img"))
 async def handle_img(message: Message):
     await send_random_file(message, "images")
 
-
 @router.message(Command("vid"))
 async def handle_vid(message: Message):
     await send_random_file(message, "videos")
 
-
 @router.message(Command("aud"))
 async def handle_aud(message: Message):
     await send_random_file(message, "audios")
-
 
 async def send_random_file(message: Message, category: str):
     file = get_random_file(category)
@@ -72,7 +66,6 @@ async def send_random_file(message: Message, category: str):
         await sent.delete()
     except:
         pass
-
 
 # --- /get <code> ---
 @router.message(F.text.startswith("/get "))
@@ -92,7 +85,6 @@ async def cmd_get_code(message: Message):
     except:
         pass
 
-
 # --- Admin-only: /secret to view secret files ---
 @router.message(Command("secret"))
 async def list_secret(message: Message):
@@ -109,7 +101,6 @@ async def list_secret(message: Message):
         kb = get_admin_controls(file["id"])
         await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
 
-
 # --- Callback handler ---
 @router.callback_query(F.data)
 async def callbacks(call: CallbackQuery):
@@ -122,7 +113,9 @@ async def callbacks(call: CallbackQuery):
     elif action == "download":
         await call.message.answer("🔽 Downloading...")
 
-
 # --- Register Handlers for Dispatcher ---
 def register_handlers(dp):
-    dp.include_router(router)
+    global _router_registered
+    if not _router_registered:
+        dp.include_router(router)
+        _router_registered = True
