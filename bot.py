@@ -6,7 +6,6 @@ import asyncio
 from config import BOT_TOKEN, ADMIN_IDS, EXPIRE_COMMANDS
 from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
-# --- Button layouts ---
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
@@ -19,9 +18,8 @@ def get_user_controls(file_id):
         [InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")]
     ])
 
-# --- Register all handlers ---
 def register_handlers(dp):
-    router = Router()  # ✅ now inside function to avoid reattachment
+    router = Router()
 
     @router.message(Command("start"))
     async def cmd_start(message: Message):
@@ -55,6 +53,7 @@ def register_handlers(dp):
     async def send_random_file(message: Message, category: str):
         file = get_random_file(category)
         if not file:
+            print(f"❌ No file found for category: {category}")
             await message.answer("No files found.")
             return
         kb = get_admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else get_user_controls(file["id"])
