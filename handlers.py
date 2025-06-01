@@ -1,5 +1,3 @@
-# handlers.py
-
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -14,7 +12,8 @@ from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_
 router = Router()
 logging.basicConfig(level=logging.INFO)
 
-# Dynamic keyboards
+upload_waiting = {}
+
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
@@ -27,7 +26,6 @@ def get_user_controls(file_id):
         InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")
     ]])
 
-# /start command
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     is_admin = message.from_user.id in ADMIN_IDS
@@ -46,7 +44,6 @@ async def cmd_start(message: Message):
         ])
     await message.answer(text, reply_markup=kb)
 
-# File categories
 @router.message(Command("img"))
 async def handle_img(message: Message):
     await send_random_file(message, "images")
@@ -73,7 +70,6 @@ async def send_random_file(message: Message, category: str):
     except:
         pass
 
-# /get CODE
 @router.message(F.text.startswith("/get "))
 async def cmd_get_code(message: Message):
     code = message.text.split("/get ")[1].strip()
@@ -91,7 +87,6 @@ async def cmd_get_code(message: Message):
     except:
         pass
 
-# Admin secret list
 @router.message(Command("secret"))
 async def list_secret(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -107,9 +102,6 @@ async def list_secret(message: Message):
         kb = get_admin_controls(file["id"])
         await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
 
-upload_waiting = {}
-
-# Handle button callbacks
 @router.callback_query(F.data)
 async def callbacks(call: CallbackQuery):
     data = call.data
@@ -131,7 +123,6 @@ async def callbacks(call: CallbackQuery):
         upload_waiting[user_id] = "file"
         await call.message.answer("📄 Please send the file to upload.")
 
-# Handle uploads
 @router.message(F.content_type.in_({
     ContentType.PHOTO, ContentType.VIDEO,
     ContentType.AUDIO, ContentType.DOCUMENT
@@ -142,14 +133,20 @@ async def handle_file_upload(message: Message):
         return
 
     file = None
+    category = "files"
+
     if message.photo:
         file = await message.bot.get_file(message.photo[-1].file_id)
+        category = "images"
     elif message.video:
         file = await message.bot.get_file(message.video.file_id)
+        category = "videos"
     elif message.audio:
         file = await message.bot.get_file(message.audio.file_id)
+        category = "audios"
     elif message.document:
         file = await message.bot.get_file(message.document.file_id)
+        category = "files"
 
     if not file:
         await message.answer("❌ File not supported.")
@@ -157,18 +154,17 @@ async def handle_file_upload(message: Message):
 
     file_path = file.file_path
     file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
-    logging.info(f"Uploading file from URL: {file_url}")
+    logging.info(f"Uploading file from URL: {file_url} (category: {category})")
 
     loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url))
+    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url, category))
 
     if response["success"]:
-        await message.answer(f"✅ Uploaded to GoFile: {response['data']['downloadPage']}")
+        await message.answer(f"✅ Uploaded to GoFile as {category}: {response['data']['url']}")
     else:
-        await message.answer("❌ Upload failed.")
+        await message.answer(f"❌ Upload failed: {response.get('message', 'Unknown error')}")
 
     upload_waiting.pop(user_id, None)
 
-# Register function for main.py
 def register_handlers(dp):
     dp.include_router(router)
