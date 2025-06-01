@@ -4,8 +4,6 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message
 from aiogram.enums import ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
 from dotenv import load_dotenv
 import os
 import uuid
@@ -16,10 +14,13 @@ from io import BytesIO
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN") + WEBHOOK_PATH
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # e.g., https://your-render-url.onrender.com
+if not WEBHOOK_DOMAIN:
+    raise ValueError("WEBHOOK_DOMAIN environment variable not set!")
 
-# Safe version of Bot initialization
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
+
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
@@ -35,7 +36,6 @@ uploaded_files = {
 
 logging.basicConfig(level=logging.INFO)
 
-
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
         server_resp = requests.get("https://api.gofile.io/servers")
@@ -44,7 +44,6 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
 
         file_bytes.seek(0)
         files = {"file": (filename, file_bytes)}
-
         upload_url = f"https://{server}.gofile.io/upload"
         res = requests.post(upload_url, files=files)
         res.raise_for_status()
@@ -65,11 +64,9 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
 
-
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
-    await message.answer("👋 Welcome! Use the menu or send a command.")
-
+    await message.answer("👋 Welcome! Send me a file and I’ll upload it to GoFile.")
 
 @router.message(F.text == "Images")
 async def list_images(message: Message):
@@ -80,7 +77,6 @@ async def list_images(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in images)
         await message.answer(response)
 
-
 @router.message(F.text == "Videos")
 async def list_videos(message: Message):
     videos = uploaded_files.get("videos", [])
@@ -90,7 +86,6 @@ async def list_videos(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in videos)
         await message.answer(response)
 
-
 @router.message(F.text == "Add File")
 async def list_files(message: Message):
     files = uploaded_files.get("files", [])
@@ -99,7 +94,6 @@ async def list_files(message: Message):
     else:
         response = "\n".join(f"{file['name']}: {file['url']}" for file in files)
         await message.answer(response)
-
 
 @router.message(F.document | F.photo | F.video | F.audio)
 async def handle_upload(message: Message):
@@ -131,37 +125,22 @@ async def handle_upload(message: Message):
         if result["success"]:
             await message.answer(f"✅ Uploaded: {filename}\n🔗 {result['data']['url']}")
         else:
-            await message.answer(f"❌ Failed to upload file:\n{result['message']}")
-
+            await message.answer(f"❌ Failed to upload:\n{result['message']}")
 
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
 
-
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
 
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    update_data = await request.body()
+    await dp.feed_raw_update(bot, update_data, update_type="webhook")
+    return {"ok": True}
 
 @app.get("/")
-async def root():
+async def health():
     return {"status": "ok"}
-
-
-@app.exception_handler(Exception)
-async def exception_handler(request: Request, exc: Exception):
-    logging.error(f"Unhandled exception: {exc}")
-    return JSONResponse(status_code=500, content={"message": "Internal server error"})
-
-
-app_router = web.RouteTableDef()
-
-
-@app_router.post(WEBHOOK_PATH)
-async def telegram_webhook(request: web.Request):
-    return await SimpleRequestHandler(dispatcher=dp, bot=bot).handle(request)
-
-
-setup_application(app, dp, bot=bot)
-app.router.add_routes(app_router)
