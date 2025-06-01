@@ -1,43 +1,27 @@
-import os
-import uuid
 import logging
-from io import BytesIO
-from collections import defaultdict
-from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, FSInputFile
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from dotenv import load_dotenv
-import requests
-from router import router  # Imported from separate file
+from aiohttp import web
+from config import BOT_TOKEN, WEBHOOK_DOMAIN
+from handlers import router
 
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}"
-
-# Bot and Dispatcher
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher(storage=MemoryStorage())
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 dp.include_router(router)
 
-# FastAPI app
-app = FastAPI()
+app = web.Application()
+SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=f"/webhook/{BOT_TOKEN}")
+setup_application(app, dp, bot=bot)
 
-# Register Aiogram webhook router
-SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+async def on_startup(app):
+    await bot.set_webhook(f"{WEBHOOK_DOMAIN}/webhook/{BOT_TOKEN}")
 
-@app.on_event("startup")
-async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL)
-    print(f"🚀 Bot started with webhook: {WEBHOOK_URL}")
+app.on_startup.append(on_startup)
 
-@app.on_event("shutdown")
-async def on_shutdown():
-    await bot.delete_webhook()
-    await bot.session.close()
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
