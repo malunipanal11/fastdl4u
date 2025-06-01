@@ -1,35 +1,50 @@
-import logging
-import requests
-from aiogram import Router, F
+import aiohttp
+from aiogram import Router, types, F
 from aiogram.types import Message
-from aiogram.enums import ContentType
-from config import GOFILE_TOKEN
+from config import ADMIN_IDS, GOFILE_TOKEN
+import json
 
 router = Router()
 
+
 @router.message(F.text == "/start")
 async def start_handler(message: Message):
-    await message.answer("👋 Hello! Send me a file and I’ll upload it to Gofile.")
+    await message.answer("👋 Welcome! Send me a file and I’ll upload it to GoFile.")
 
-@router.message(F.content_type.in_({ContentType.DOCUMENT, ContentType.VIDEO, ContentType.AUDIO, ContentType.PHOTO}))
-async def upload_file(message: Message):
-    file = await message.bot.get_file(message.document.file_id)
-    file_path = file.file_path
-    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
-    
+
+@router.message(F.document)
+async def upload_file(message: Message, bot):
+    file = message.document
+    file_id = file.file_id
+    file_name = file.file_name
+
+    # Get file from Telegram servers
+    telegram_file = await bot.get_file(file_id)
+    file_path = telegram_file.file_path
+    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+
+    # Get best GoFile server
     try:
-        # Get Gofile server
-        server_resp = requests.get(f"https://api.gofile.io/getServer?token={GOFILE_TOKEN}").json()
-        server = server_resp["data"]["server"]
-        upload_url = f"https://{server}.gofile.io/uploadFile"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://api.gofile.io/getServer?token={GOFILE_TOKEN}") as resp:
+                data = await resp.json()
+                server = data["data"]["server"]
+                upload_url = f"https://{server}.gofile.io/uploadFile"
 
-        # Upload to Gofile
-        file_bytes = await message.document.download(destination=bytes)
-        response = requests.post(upload_url, files={"file": file_bytes}, data={"token": GOFILE_TOKEN})
-        response.raise_for_status()
+                # Upload file
+                async with session.get(file_url) as file_response:
+                    file_data = await file_response.read()
+                    form = aiohttp.FormData()
+                    form.add_field("file", file_data, filename=file_name)
+                    form.add_field("token", GOFILE_TOKEN)
 
-        link = response.json()["data"]["downloadPage"]
-        await message.answer(f"✅ File uploaded:\n{link}")
+                    async with session.post(upload_url, data=form) as upload_resp:
+                        upload_data = await upload_resp.json()
+
+                        if upload_data["status"] == "ok":
+                            file_link = upload_data["data"]["downloadPage"]
+                            await message.reply(f"✅ Uploaded: [Download File]({file_link})", disable_web_page_preview=True)
+                        else:
+                            await message.reply("❌ Upload failed.")
     except Exception as e:
-        logging.exception("Upload failed")
-        await message.answer("❌ Upload failed: " + str(e))
+        await message.reply(f"❌ Error uploading file:\n{str(e)}")
