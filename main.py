@@ -5,52 +5,51 @@ from io import BytesIO
 from collections import defaultdict
 
 from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import FSInputFile
-from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import requests
-import json
 
-# Load environment variables
+from aiogram import Bot, Dispatcher, F, Router, types
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Update
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "").split(",") if i.strip()]
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}"
 
-# Bot setup
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+router = Router()
 app = FastAPI()
 
-# In-memory storage
 uploaded_files = defaultdict(list)
 user_categories = {}
 
-logging.basicConfig(level=logging.INFO)
+# Attach router to dispatcher
+dp.include_router(router)
 
 # /start command
-@dp.message(commands=["start"])
+@router.message(F.text.startswith("/start"))
 async def cmd_start(message: types.Message):
-    await message.answer("👋 Welcome! Use /add <category> and then send me files to upload.")
+    await message.answer("👋 Welcome! Use /add <category> and send me files.")
 
-# /add <category> command
-@dp.message(commands=["add"])
+# /add command
+@router.message(F.text.startswith("/add"))
 async def cmd_add(message: types.Message):
-    args = message.text.split()
+    args = message.text.strip().split()
     if len(args) < 2:
         await message.reply("❗ Usage: /add <category>")
         return
     category = args[1]
     user_categories[message.from_user.id] = category
-    await message.reply(f"📁 Category set to: {category}. Now send the files.")
+    await message.reply(f"📁 Now send files to add in category: {category}")
 
-# Upload handler
-@dp.message()
+# File handler
+@router.message()
 async def handle_files(message: types.Message):
     user_id = message.from_user.id
     category = user_categories.get(user_id)
@@ -63,35 +62,32 @@ async def handle_files(message: types.Message):
     filename = None
     file_bytes = BytesIO()
 
-    try:
-        if message.document:
-            file_info = message.document
-            filename = file_info.file_name
-        elif message.photo:
-            file_info = message.photo[-1]  # highest quality photo
-            filename = f"photo_{file_info.file_id}.jpg"
-        else:
-            await message.reply("❗ Unsupported file type.")
-            return
+    if message.document:
+        file_info = message.document
+        filename = file_info.file_name
+    elif message.photo:
+        file_info = message.photo[-1]
+        filename = f"photo_{file_info.file_id}.jpg"
+    else:
+        await message.reply("❗ Unsupported file type.")
+        return
 
+    try:
         tg_file = await bot.get_file(file_info.file_id)
-        file_path = tg_file.file_path
-        file = await bot.download_file(file_path)
+        file = await bot.download_file(tg_file.file_path)
         file_bytes.write(file.read())
         file_bytes.seek(0)
 
-        # Upload to GoFile
         upload_result = upload_to_gofile_bytes(file_bytes, filename, category)
         if upload_result["success"]:
-            url = upload_result["data"]["url"]
-            await message.reply(f"✅ Uploaded: {url}")
+            await message.reply(f"✅ Uploaded: {upload_result['data']['url']}")
         else:
-            await message.reply(f"❌ Failed to upload:\n{upload_result['message']}")
+            await message.reply(f"❌ Upload failed: {upload_result['message']}")
     except Exception as e:
-        logging.exception("Error handling file")
-        await message.reply("❌ Error occurred while processing the file.")
+        logging.exception("File handling failed")
+        await message.reply("❌ Error while processing the file.")
 
-# GoFile upload function
+# Upload to GoFile
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
         server_resp = requests.get("https://api.gofile.io/getServer", params={"token": GOFILE_TOKEN})
@@ -102,15 +98,13 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
             return {"success": False, "message": "Failed to get GoFile server."}
 
         server = server_data["data"]["server"]
-        upload_url = f"https://{server}.gofile.io/uploadFile"
         files = {"file": (filename, file_bytes)}
         data = {"token": GOFILE_TOKEN}
-
-        res = requests.post(upload_url, files=files, data=data)
+        res = requests.post(f"https://{server}.gofile.io/uploadFile", files=files, data=data)
         res.raise_for_status()
         result = res.json()
 
-        if result.get("status") == "ok":
+        if result["status"] == "ok":
             file_data = {
                 "id": str(uuid.uuid4()),
                 "name": filename,
@@ -119,32 +113,24 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
             }
             uploaded_files[category].append(file_data)
             return {"success": True, "data": file_data}
-        else:
-            return {"success": False, "message": result.get("message", "Unknown error")}
+        return {"success": False, "message": result.get("message", "Unknown error")}
     except Exception as e:
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
 
-# Webhook handler
+# Webhook
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    try:
-        update_data = await request.json()
-        await dp.feed_raw_update(bot, update_data, update_type="webhook")
-        return {"ok": True}
-    except Exception as e:
-        logging.exception("Webhook processing failed")
-        return {"ok": False, "error": str(e)}
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
-# Startup
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
-    logging.info("Webhook set successfully.")
 
-# Shutdown
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
     await bot.session.close()
-    logging.info("Bot shutdown complete.")
