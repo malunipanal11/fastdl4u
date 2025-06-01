@@ -4,6 +4,7 @@ import uuid
 import logging
 import json
 from urllib.parse import urlparse
+from random import choice
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -27,12 +28,23 @@ def is_valid_url(url: str) -> bool:
     return all([parsed.scheme, parsed.netloc])
 
 
-def upload_to_gofile(file_url: str, category: str = "files"):
-    if category not in uploaded_files:
-        raise ValueError(f"Unknown category: {category}")
+def detect_category(file_url: str) -> str:
+    if any(file_url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+        return "images"
+    elif any(file_url.lower().endswith(ext) for ext in [".mp4", ".mov", ".mkv"]):
+        return "videos"
+    elif any(file_url.lower().endswith(ext) for ext in [".mp3", ".wav", ".ogg"]):
+        return "audios"
+    return "files"
 
+
+def upload_to_gofile(file_url: str, category: str = None):
     if not is_valid_url(file_url):
         raise ValueError(f"Invalid file URL: {file_url}")
+
+    category = category or detect_category(file_url)
+    if category not in uploaded_files:
+        raise ValueError(f"Unknown category: {category}")
 
     logging.info("Fetching GoFile server...")
     server_resp = requests.get("https://api.gofile.io/getServer")
@@ -41,10 +53,10 @@ def upload_to_gofile(file_url: str, category: str = "files"):
 
     server = server_resp.json()["data"]["server"]
 
-    logging.info(f"Downloading file from Telegram: {file_url}")
+    logging.info(f"Downloading file from URL: {file_url}")
     tg_file = requests.get(file_url)
     if tg_file.status_code != 200:
-        raise Exception("Failed to download file from Telegram.")
+        raise Exception("Failed to download file.")
 
     filename = file_url.split("/")[-1] or f"{uuid.uuid4().hex}.bin"
     file_bytes = BytesIO(tg_file.content)
@@ -86,7 +98,7 @@ def add_secret(text: str):
         "type": "secret",
         "text": text,
         "code": code,
-        "url": f"🔒 Secret: {text}",
+        "url": f"🔒 Secret: {text}"
     }
     uploaded_files["secret"].append(item)
     save_to_disk()
@@ -107,9 +119,7 @@ def add_link(link: str):
 
 
 def get_random_file(category: str):
-    from random import choice
-    files = uploaded_files.get(category, [])
-    return choice(files) if files else None
+    return choice(uploaded_files.get(category, [])) if uploaded_files.get(category) else None
 
 
 def get_file_by_code(code: str):
