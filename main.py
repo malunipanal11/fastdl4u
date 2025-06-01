@@ -2,30 +2,31 @@ import os
 import logging
 from io import BytesIO
 from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, Router, types
-from aiogram.enums import ParseMode, ContentType
+from aiogram import Bot, Dispatcher, types, Router
+from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.filters import Command
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import Update
 import requests
 import uuid
 
-# Configuration
+# Config
 TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or "https://your.domain/webhook"
 
-# Logging setup
+# Logging
 logging.basicConfig(level=logging.INFO)
 
-# FastAPI app
+# FastAPI App
 app = FastAPI()
 
-# Telegram Bot setup
+# Telegram Bot Setup
 bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
-# In-memory storage for uploaded file metadata
+# In-memory storage
 uploaded_files = {
     "images": [],
     "videos": [],
@@ -33,7 +34,8 @@ uploaded_files = {
     "files": []
 }
 
-# Detect file type
+
+# File type categorization
 def detect_type(filename: str) -> str:
     if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         return "images"
@@ -44,7 +46,8 @@ def detect_type(filename: str) -> str:
     else:
         return "files"
 
-# Upload file to GoFile.io
+
+# Upload to GoFile using BytesIO
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
         server_resp = requests.get("https://api.gofile.io/getServer")
@@ -70,21 +73,23 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
         logging.error(f"Upload failed: {e}")
         return {"success": False, "message": str(e)}
 
-# /start command handler
-@router.message(Command("start"))
+
+# Handler: /start command
+@router.message(lambda msg: msg.text == "/start")
 async def cmd_start(message: types.Message):
     kb = [
-        [types.KeyboardButton(text="Images"), types.KeyboardButton(text="Videos")],
-        [types.KeyboardButton(text="Audio"), types.KeyboardButton(text="Add File")],
-        [types.KeyboardButton(text="Add Secret"), types.KeyboardButton(text="Add Link")]
+        [KeyboardButton(text="Images"), KeyboardButton(text="Videos")],
+        [KeyboardButton(text="Audio"), KeyboardButton(text="Add File")],
+        [KeyboardButton(text="Add Secret"), KeyboardButton(text="Add Link")]
     ]
     await message.answer(
         "👋 Welcome! Use the menu or send a command.",
-        reply_markup=types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     )
 
-# File upload handler
-@router.message(lambda msg: msg.document or msg.photo or msg.video or msg.audio, content_types=ContentType.ANY)
+
+# Handler: file upload
+@router.message(lambda msg: msg.document or msg.photo or msg.video or msg.audio)
 async def handle_upload(message: types.Message):
     filename = "file"
     file_id = None
@@ -127,19 +132,21 @@ async def handle_upload(message: types.Message):
         logging.error(f"Handler error: {e}")
         await message.reply("❌ Error processing file.")
 
-# Webhook endpoint
+
+# Webhook handler
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
         data = await request.json()
-        update = types.Update.model_validate(data)
+        update = Update.model_validate(data)
         await dp._process_update(bot=bot, update=update)
         return {"ok": True}
     except Exception as e:
         logging.error(f"Webhook error: {e}")
         return {"ok": False}
 
-# Startup hook: set webhook
+
+# Startup hook
 @app.on_event("startup")
 async def on_startup():
     if not WEBHOOK_URL:
@@ -148,7 +155,8 @@ async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"✅ Webhook set to: {WEBHOOK_URL}")
 
-# Shutdown hook: delete webhook
+
+# Shutdown hook
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
