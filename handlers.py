@@ -1,68 +1,88 @@
-from aiogram import types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from datetime import datetime, timedelta
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.enums import ContentType
 import asyncio
-import os
+import functools
+import logging
 
-from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 from config import ADMIN_IDS, EXPIRE_COMMANDS
-from utils import generate_code, save_file_metadata
+from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
-# --- Start Command ---
-async def handle_start(message: types.Message):
+router = Router()
+logging.basicConfig(level=logging.INFO)
+
+# Button layouts
+def get_admin_controls(file_id):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
+        InlineKeyboardButton(text="👁 Download", callback_data=f"download_{file_id}"),
+        InlineKeyboardButton(text="❌ Delete", callback_data=f"delete_{file_id}")
+    ]])
+
+def get_user_controls(file_id):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")
+    ]])
+
+# Register router
+def register_handlers(dp):
+    dp.include_router(router)
+
+@router.message(Command("start"))
+async def cmd_start(message: Message):
     is_admin = message.from_user.id in ADMIN_IDS
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    text = "👋 Welcome! Use the menu or send a command."
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🖼 Images", callback_data="img"),
+        InlineKeyboardButton(text="🎞 Videos", callback_data="vid"),
+        InlineKeyboardButton(text="🎷 Audio", callback_data="aud")
+    ]])
 
-    commands = ["/img", "/vid", "/aud"]
     if is_admin:
-        commands.extend(["/addfile", "/addsecret", "/addlink", "/link", "/secret"])
+        kb.inline_keyboard.append([
+            InlineKeyboardButton(text="➕ Add File", callback_data="addfile"),
+            InlineKeyboardButton(text="🔒 Add Secret", callback_data="addsecret"),
+            InlineKeyboardButton(text="🔗 Add Link", callback_data="addlink")
+        ])
+    await message.answer(text, reply_markup=kb)
 
-    for cmd in commands:
-        kb.add(types.KeyboardButton(cmd))
+@router.message(Command("img"))
+async def handle_img(message: Message):
+    await send_random_file(message, "images")
 
-    await message.answer("👋 Welcome to the bot!\nChoose an option below:", reply_markup=kb)
+@router.message(Command("vid"))
+async def handle_vid(message: Message):
+    await send_random_file(message, "videos")
 
-# --- Add File ---
-async def handle_add_file(message: types.Message, category):
-    if message.from_user.id not in ADMIN_IDS:
-        return await message.reply("❌ You are not authorized.")
+@router.message(Command("aud"))
+async def handle_aud(message: Message):
+    await send_random_file(message, "audios")
 
-    file = message.document or message.photo[-1] if message.photo else None
-    if not file:
-        return await message.reply("Please send a valid file (photo, document, etc.)")
-
-    filename = file.file_name if hasattr(file, 'file_name') else f"{file.file_unique_id}.jpg"
-    path = f"storage/{filename}"
-    await file.download(destination_file=path)
-
-    gofile_url, file_id = upload_to_gofile(path, category=category)
-    save_file_metadata(file_id, gofile_url, category, message.from_user.id)
-
-    await message.reply(f"✅ Uploaded: {gofile_url}")
-    os.remove(path)
-
-# --- Random File (img, vid, aud) ---
-async def handle_random_file(message: types.Message, category):
+async def send_random_file(message: Message, category: str):
     file = get_random_file(category)
     if not file:
-        return await message.reply("⚠️ No files available.")
+        await message.answer("No files found.")
+        return
 
-    delay = EXPIRE_COMMANDS.get(category[:-1], 600)
-    sent = await message.reply(file["url"])
-
-    await asyncio.sleep(delay)
+    kb = get_admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else get_user_controls(file["id"])
+    sent = await message.answer(file["url"], reply_markup=kb)
+    await asyncio.sleep(EXPIRE_COMMANDS.get(category[:-1], 600))
     try:
         await sent.delete()
     except:
         pass
 
-# --- Secret Code Access ---
-async def handle_get_code(message: types.Message, code):
+@router.message(F.text.startswith("/get "))
+async def cmd_get_code(message: Message):
+    code = message.text.split("/get ")[1].strip()
     file = get_file_by_code(code)
     if not file:
-        return await message.reply("❌ Invalid code.")
+        await message.answer("Invalid code.")
+        return
 
-    sent = await message.reply(f"🔐 Secret file: {file['url']}")
+    kb = get_user_controls(file["id"])
+    sent = await message.answer(file["url"], reply_markup=kb)
     await asyncio.sleep(EXPIRE_COMMANDS["code"])
     try:
         await sent.delete()
@@ -70,19 +90,77 @@ async def handle_get_code(message: types.Message, code):
     except:
         pass
 
-# --- List Secret Files ---
-async def handle_secret_list(message: types.Message):
+@router.message(Command("secret"))
+async def list_secret(message: Message):
     if message.from_user.id not in ADMIN_IDS:
-        return await message.reply("Unauthorized.")
+        await message.answer("You are not authorized.")
+        return
 
     files = get_all_files_by_type("secret")
     if not files:
-        return await message.reply("No secret files available.")
+        await message.answer("No secret files.")
+        return
 
     for file in files:
-        kb = InlineKeyboardMarkup(row_width=3).add(
-            InlineKeyboardButton("▶ Play", url=file["url"]),
-            InlineKeyboardButton("📥 Download", url=file["url"]),
-            InlineKeyboardButton("❌ Delete", callback_data=f"delete_{file['id']}")
-        )
-        await message.answer(f"🔐 Code: {file['code']}", reply_markup=kb)
+        kb = get_admin_controls(file["id"])
+        await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
+
+upload_waiting = {}
+
+@router.callback_query(F.data)
+async def callbacks(call: CallbackQuery):
+    data = call.data
+    user_id = call.from_user.id
+
+    if data in ["img", "vid", "aud"]:
+        await call.answer()
+        await send_random_file(call.message, {"img": "images", "vid": "videos", "aud": "audios"}[data])
+
+    elif data.startswith("play_") or data.startswith("download_"):
+        await call.answer("Feature coming soon!")
+
+    elif data.startswith("delete_") and user_id in ADMIN_IDS:
+        file_id = data.split("_", 1)[1]
+        delete_file(file_id)
+        await call.message.delete()
+
+    elif data == "addfile" and user_id in ADMIN_IDS:
+        upload_waiting[user_id] = "file"
+        await call.message.answer("📄 Please send the file to upload.")
+
+@router.message(F.content_type.in_({
+    ContentType.PHOTO, ContentType.VIDEO,
+    ContentType.AUDIO, ContentType.DOCUMENT
+}))
+async def handle_file_upload(message: Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS or upload_waiting.get(user_id) != "file":
+        return
+
+    file = None
+    if message.photo:
+        file = await message.bot.get_file(message.photo[-1].file_id)
+    elif message.video:
+        file = await message.bot.get_file(message.video.file_id)
+    elif message.audio:
+        file = await message.bot.get_file(message.audio.file_id)
+    elif message.document:
+        file = await message.bot.get_file(message.document.file_id)
+
+    if not file:
+        await message.answer("❌ File not supported.")
+        return
+
+    file_path = file.file_path
+    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
+    logging.info(f"Uploading file from URL: {file_url}")
+
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url))
+
+    if response["success"]:
+        await message.answer(f"✅ Uploaded to GoFile: {response['data']['downloadPage']}")
+    else:
+        await message.answer("❌ Upload failed.")
+
+    upload_waiting.pop(user_id, None)
