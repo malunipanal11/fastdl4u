@@ -168,3 +168,7 @@ async def handle_file_upload(message: Message):
         await message.answer("❌ Upload failed.")
 
     upload_waiting.pop(user_id, None)
+
+# Register function for main.py
+def register_handlers(dp):
+    dp.include_router(router)
