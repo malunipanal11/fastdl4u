@@ -1,30 +1,28 @@
-from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
-from config import TOKEN, WEBHOOK_URL
+from config import BOT_TOKEN, WEBHOOK_URL
 from handlers import router
 
-# Define bot and dispatcher
-bot = Bot(token=TOKEN, default=ParseMode.HTML)
+# Create bot with default HTML parse mode
+bot = Bot(token=BOT_TOKEN, default=types.DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(router)
 
-# Define FastAPI app
-app = FastAPI()
+app = web.Application()
 
-# Webhook setup
-@app.on_event("startup")
-async def on_startup():
-    await bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
+# Webhook setup on app startup
+async def on_startup(app):
+    await bot.set_webhook(WEBHOOK_URL)
 
-@app.on_event("shutdown")
-async def on_shutdown():
-    await bot.delete_webhook()
+app.on_startup.append(on_startup)
 
-# Handle webhook requests
-@app.post(f"/webhook/{TOKEN}")
-async def telegram_webhook(request: Request):
-    return await SimpleRequestHandler(dispatcher=dp, bot=bot).handle(request)
+# Register request handler with dispatcher and bot
+setup_application(app, dp, bot=bot)
+SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
+
+# Export app for uvicorn
+# Command to run: uvicorn main:app --host 0.0.0.0 --port $PORT
