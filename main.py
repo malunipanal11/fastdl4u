@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message
+from aiogram.types import Message, Update
 from aiogram.enums import ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
@@ -11,21 +11,23 @@ import requests
 import logging
 from io import BytesIO
 
+# Load environment variables
 load_dotenv()
-
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # e.g., https://your-render-url.onrender.com
-if not WEBHOOK_DOMAIN:
-    raise ValueError("WEBHOOK_DOMAIN environment variable not set!")
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # https://your-render-url.onrender.com
+if not TOKEN or not WEBHOOK_DOMAIN:
+    raise ValueError("Missing BOT_TOKEN or WEBHOOK_DOMAIN in environment variables.")
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
+WEBHOOK_URL = f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}"
 
+# Initialize bot and dispatcher
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
+# FastAPI app
 app = FastAPI()
 
 uploaded_files = {
@@ -35,6 +37,7 @@ uploaded_files = {
 }
 
 logging.basicConfig(level=logging.INFO)
+
 
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
@@ -64,9 +67,12 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
 
+
+# === Handlers ===
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
     await message.answer("👋 Welcome! Send me a file and I’ll upload it to GoFile.")
+
 
 @router.message(F.text == "Images")
 async def list_images(message: Message):
@@ -77,6 +83,7 @@ async def list_images(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in images)
         await message.answer(response)
 
+
 @router.message(F.text == "Videos")
 async def list_videos(message: Message):
     videos = uploaded_files.get("videos", [])
@@ -86,6 +93,7 @@ async def list_videos(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in videos)
         await message.answer(response)
 
+
 @router.message(F.text == "Add File")
 async def list_files(message: Message):
     files = uploaded_files.get("files", [])
@@ -94,6 +102,7 @@ async def list_files(message: Message):
     else:
         response = "\n".join(f"{file['name']}: {file['url']}" for file in files)
         await message.answer(response)
+
 
 @router.message(F.document | F.photo | F.video | F.audio)
 async def handle_upload(message: Message):
@@ -127,20 +136,28 @@ async def handle_upload(message: Message):
         else:
             await message.answer(f"❌ Failed to upload:\n{result['message']}")
 
+
+# === FastAPI endpoints ===
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook set to {WEBHOOK_URL}")
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
+    logging.info("Webhook deleted.")
+
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    update_data = await request.body()
-    await dp.feed_raw_update(bot, update_data, update_type="webhook")
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
     return {"ok": True}
 
+
 @app.get("/")
-async def health():
+async def root():
     return {"status": "ok"}
