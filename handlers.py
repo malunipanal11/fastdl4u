@@ -1,3 +1,5 @@
+# handlers.py
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -12,7 +14,7 @@ from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_
 router = Router()
 logging.basicConfig(level=logging.INFO)
 
-# Button layouts
+# Dynamic keyboards
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
@@ -25,10 +27,7 @@ def get_user_controls(file_id):
         InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")
     ]])
 
-# Register router
-def register_handlers(dp):
-    dp.include_router(router)
-
+# /start command
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     is_admin = message.from_user.id in ADMIN_IDS
@@ -47,6 +46,7 @@ async def cmd_start(message: Message):
         ])
     await message.answer(text, reply_markup=kb)
 
+# File categories
 @router.message(Command("img"))
 async def handle_img(message: Message):
     await send_random_file(message, "images")
@@ -73,6 +73,7 @@ async def send_random_file(message: Message, category: str):
     except:
         pass
 
+# /get CODE
 @router.message(F.text.startswith("/get "))
 async def cmd_get_code(message: Message):
     code = message.text.split("/get ")[1].strip()
@@ -90,6 +91,7 @@ async def cmd_get_code(message: Message):
     except:
         pass
 
+# Admin secret list
 @router.message(Command("secret"))
 async def list_secret(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -107,6 +109,7 @@ async def list_secret(message: Message):
 
 upload_waiting = {}
 
+# Handle button callbacks
 @router.callback_query(F.data)
 async def callbacks(call: CallbackQuery):
     data = call.data
@@ -128,6 +131,7 @@ async def callbacks(call: CallbackQuery):
         upload_waiting[user_id] = "file"
         await call.message.answer("📄 Please send the file to upload.")
 
+# Handle uploads
 @router.message(F.content_type.in_({
     ContentType.PHOTO, ContentType.VIDEO,
     ContentType.AUDIO, ContentType.DOCUMENT
