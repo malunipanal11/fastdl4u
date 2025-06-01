@@ -1,15 +1,19 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.enums import ContentType
 import asyncio
+import functools
+import logging
 
 from config import ADMIN_IDS, EXPIRE_COMMANDS
 from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
 
 router = Router()
+logging.basicConfig(level=logging.INFO)
 
 # --- Button layouts ---
+
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -25,6 +29,7 @@ def get_user_controls(file_id):
     ])
 
 # --- Handler Registration ---
+
 def register_handlers(dp):
     dp.include_router(router)
 
@@ -151,7 +156,10 @@ async def handle_file_upload(message: Message):
 
     file_path = file.file_path
     file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
-    response = upload_to_gofile(file_url)
+    logging.info(f"Uploading file from URL: {file_url}")
+
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url))
 
     if response["success"]:
         await message.answer(f"✅ Uploaded to GoFile: {response['data']['downloadPage']}")
