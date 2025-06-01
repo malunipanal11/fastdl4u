@@ -7,13 +7,19 @@ import functools
 import logging
 
 from config import ADMIN_IDS, EXPIRE_COMMANDS
-from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
+from gofile import (
+    upload_to_gofile, get_random_file, get_file_by_code,
+    get_all_files_by_type, delete_file, add_secret, add_link,
+    get_file_by_id
+)
 
 router = Router()
 logging.basicConfig(level=logging.INFO)
 
+# Upload tracking
 upload_waiting = {}
 
+# Dynamic keyboards
 def get_admin_controls(file_id):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
@@ -26,6 +32,7 @@ def get_user_controls(file_id):
         InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")
     ]])
 
+# /start
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     is_admin = message.from_user.id in ADMIN_IDS
@@ -35,7 +42,6 @@ async def cmd_start(message: Message):
         InlineKeyboardButton(text="🎞 Videos", callback_data="vid"),
         InlineKeyboardButton(text="🎷 Audio", callback_data="aud")
     ]])
-
     if is_admin:
         kb.inline_keyboard.append([
             InlineKeyboardButton(text="➕ Add File", callback_data="addfile"),
@@ -44,6 +50,7 @@ async def cmd_start(message: Message):
         ])
     await message.answer(text, reply_markup=kb)
 
+# File category commands
 @router.message(Command("img"))
 async def handle_img(message: Message):
     await send_random_file(message, "images")
@@ -56,6 +63,7 @@ async def handle_vid(message: Message):
 async def handle_aud(message: Message):
     await send_random_file(message, "audios")
 
+# Random file sender
 async def send_random_file(message: Message, category: str):
     file = get_random_file(category)
     if not file:
@@ -70,6 +78,7 @@ async def send_random_file(message: Message, category: str):
     except:
         pass
 
+# /get CODE
 @router.message(F.text.startswith("/get "))
 async def cmd_get_code(message: Message):
     code = message.text.split("/get ")[1].strip()
@@ -87,6 +96,7 @@ async def cmd_get_code(message: Message):
     except:
         pass
 
+# Admin - List secrets
 @router.message(Command("secret"))
 async def list_secret(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -102,6 +112,7 @@ async def list_secret(message: Message):
         kb = get_admin_controls(file["id"])
         await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
 
+# Callbacks
 @router.callback_query(F.data)
 async def callbacks(call: CallbackQuery):
     data = call.data
@@ -111,8 +122,13 @@ async def callbacks(call: CallbackQuery):
         await call.answer()
         await send_random_file(call.message, {"img": "images", "vid": "videos", "aud": "audios"}[data])
 
-    elif data.startswith("play_") or data.startswith("download_"):
-        await call.answer("Feature coming soon!")
+    elif data.startswith("play_"):
+        file_id = data.split("_", 1)[1]
+        file = get_file_by_id(file_id)
+        if not file:
+            await call.answer("File not found.")
+            return
+        await call.message.answer(f"🌐 Preview: {file['url']}")
 
     elif data.startswith("delete_") and user_id in ADMIN_IDS:
         file_id = data.split("_", 1)[1]
@@ -123,6 +139,15 @@ async def callbacks(call: CallbackQuery):
         upload_waiting[user_id] = "file"
         await call.message.answer("📄 Please send the file to upload.")
 
+    elif data == "addsecret" and user_id in ADMIN_IDS:
+        upload_waiting[user_id] = "secret"
+        await call.message.answer("🔒 Send me the secret text you want to store.")
+
+    elif data == "addlink" and user_id in ADMIN_IDS:
+        upload_waiting[user_id] = "link"
+        await call.message.answer("🔗 Send the link you want to store.")
+
+# File upload
 @router.message(F.content_type.in_({
     ContentType.PHOTO, ContentType.VIDEO,
     ContentType.AUDIO, ContentType.DOCUMENT
@@ -133,38 +158,50 @@ async def handle_file_upload(message: Message):
         return
 
     file = None
-    category = "files"
-
     if message.photo:
         file = await message.bot.get_file(message.photo[-1].file_id)
-        category = "images"
     elif message.video:
         file = await message.bot.get_file(message.video.file_id)
-        category = "videos"
     elif message.audio:
         file = await message.bot.get_file(message.audio.file_id)
-        category = "audios"
     elif message.document:
         file = await message.bot.get_file(message.document.file_id)
-        category = "files"
 
     if not file:
         await message.answer("❌ File not supported.")
         return
 
-    file_path = file.file_path
-    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
-    logging.info(f"Uploading file from URL: {file_url} (category: {category})")
-
+    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file.file_path}"
+    logging.info(f"Uploading file from URL: {file_url}")
     loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url, category))
+    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url))
 
     if response["success"]:
-        await message.answer(f"✅ Uploaded to GoFile as {category}: {response['data']['url']}")
+        await message.answer(f"✅ Uploaded to GoFile: {response['data']['url']}")
     else:
-        await message.answer(f"❌ Upload failed: {response.get('message', 'Unknown error')}")
+        await message.answer("❌ Upload failed.")
 
     upload_waiting.pop(user_id, None)
 
+# Text input (for secret/link)
+@router.message(F.text)
+async def handle_text_entry(message: Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+
+    if upload_waiting.get(user_id) == "secret":
+        text = message.text.strip()
+        url, code = add_secret(text)
+        await message.answer(f"✅ Secret saved!\n🔐 Code: `{code}`\n📎 {url}", parse_mode="Markdown")
+
+    elif upload_waiting.get(user_id) == "link":
+        link = message.text.strip()
+        url, code = add_link(link)
+        await message.answer(f"✅ Link saved!\n🔗 Code: `{code}`\n📎 {url}", parse_mode="Markdown")
+
+    upload_waiting.pop(user_id, None)
+
+# Register
 def register_handlers(dp):
     dp.include_router(router)
