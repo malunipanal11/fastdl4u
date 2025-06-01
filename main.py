@@ -14,23 +14,27 @@ from io import BytesIO
 # Load .env variables
 load_dotenv()
 
+# Env vars
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 
 if not WEBHOOK_DOMAIN:
-    raise ValueError("WEBHOOK_DOMAIN environment variable not set!")
+    raise ValueError("WEBHOOK_DOMAIN not set!")
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
 
+# Initialize bot & dispatcher
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
+# FastAPI app
 app = FastAPI()
 
+# Track uploaded files
 uploaded_files = {
     "images": [],
     "videos": [],
@@ -39,49 +43,46 @@ uploaded_files = {
 
 logging.basicConfig(level=logging.INFO)
 
-
+# ✅ Upload function with GOFILE_TOKEN
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
-        headers = {}
-        if GOFILE_TOKEN:
-            headers["Authorization"] = GOFILE_TOKEN
-
-        # Get available server
-        server_resp = requests.get("https://api.gofile.io/getServer", headers=headers)
+        gofile_token = os.getenv("GOFILE_TOKEN")
+        server_resp = requests.get("https://api.gofile.io/getServer", params={"token": gofile_token})
+        server_resp.raise_for_status()
         server_data = server_resp.json()
 
-        if server_data["status"] != "ok":
-            raise ValueError(server_data.get("message", "Failed to get server"))
+        if server_data.get("status") != "ok":
+            return {"success": False, "message": "Failed to get GoFile server."}
 
         server = server_data["data"]["server"]
 
         file_bytes.seek(0)
         files = {"file": (filename, file_bytes)}
         upload_url = f"https://{server}.gofile.io/uploadFile"
+        res = requests.post(upload_url, files=files, data={"token": gofile_token})
+        res.raise_for_status()
 
-        upload_resp = requests.post(upload_url, headers=headers, files=files)
-        upload_data = upload_resp.json()
-
-        if upload_data["status"] == "ok":
-            file_info = {
+        result = res.json()
+        if result.get("status") == "ok":
+            file_data = {
                 "id": str(uuid.uuid4()),
                 "name": filename,
-                "url": upload_data["data"]["downloadPage"],
-                "code": upload_data["data"]["code"]
+                "url": result["data"]["downloadPage"],
+                "code": result["data"]["code"]
             }
-            uploaded_files[category].append(file_info)
-            return {"success": True, "data": file_info}
+            uploaded_files[category].append(file_data)
+            return {"success": True, "data": file_data}
         else:
-            return {"success": False, "message": upload_data.get("message", "Upload failed")}
+            return {"success": False, "message": result.get("message", "Unknown error")}
     except Exception as e:
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
 
+# === Bot handlers ===
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
-    await message.answer("👋 Welcome! Send me any file (image, video, doc) and I’ll upload it to GoFile.\n\nUse:\n📸 'Images'\n🎞 'Videos'\n📁 'Add File' to see uploaded items.")
-
+    await message.answer("👋 Welcome! Send me a file and I’ll upload it to GoFile.")
 
 @router.message(F.text == "Images")
 async def list_images(message: Message):
@@ -92,7 +93,6 @@ async def list_images(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in images)
         await message.answer(response)
 
-
 @router.message(F.text == "Videos")
 async def list_videos(message: Message):
     videos = uploaded_files.get("videos", [])
@@ -102,7 +102,6 @@ async def list_videos(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in videos)
         await message.answer(response)
 
-
 @router.message(F.text == "Add File")
 async def list_files(message: Message):
     files = uploaded_files.get("files", [])
@@ -111,7 +110,6 @@ async def list_files(message: Message):
     else:
         response = "\n".join(f"{file['name']}: {file['url']}" for file in files)
         await message.answer(response)
-
 
 @router.message(F.document | F.photo | F.video | F.audio)
 async def handle_upload(message: Message):
@@ -145,23 +143,21 @@ async def handle_upload(message: Message):
         else:
             await message.answer(f"❌ Failed to upload:\n{result['message']}")
 
+# === FastAPI events and webhook ===
 
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
 
-
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
-
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     update_data = await request.body()
     await dp.feed_raw_update(bot, update_data, update_type="webhook")
     return {"ok": True}
-
 
 @app.get("/")
 async def health():
