@@ -1,6 +1,6 @@
 fastapi
-uvicorn[standard]
+uvicorn
 aiogram==3.2.0
-httpx
 requests
+httpx
 python-dotenv
