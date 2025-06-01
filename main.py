@@ -2,8 +2,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message
+from aiogram.enums import ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from dotenv import load_dotenv
@@ -13,22 +13,20 @@ import requests
 import logging
 from io import BytesIO
 
-# Load environment variables
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN") + WEBHOOK_PATH
 
-# Initialize bot and dispatcher
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+# Safe version of Bot initialization
+bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
 app = FastAPI()
 
-# In-memory storage
 uploaded_files = {
     "images": [],
     "videos": [],
@@ -37,7 +35,7 @@ uploaded_files = {
 
 logging.basicConfig(level=logging.INFO)
 
-# Upload to GoFile
+
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
         server_resp = requests.get("https://api.gofile.io/servers")
@@ -67,11 +65,11 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
 
-# === Handlers ===
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
     await message.answer("👋 Welcome! Use the menu or send a command.")
+
 
 @router.message(F.text == "Images")
 async def list_images(message: Message):
@@ -82,6 +80,7 @@ async def list_images(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in images)
         await message.answer(response)
 
+
 @router.message(F.text == "Videos")
 async def list_videos(message: Message):
     videos = uploaded_files.get("videos", [])
@@ -91,6 +90,7 @@ async def list_videos(message: Message):
         response = "\n".join(f"{file['name']}: {file['url']}" for file in videos)
         await message.answer(response)
 
+
 @router.message(F.text == "Add File")
 async def list_files(message: Message):
     files = uploaded_files.get("files", [])
@@ -99,6 +99,7 @@ async def list_files(message: Message):
     else:
         response = "\n".join(f"{file['name']}: {file['url']}" for file in files)
         await message.answer(response)
+
 
 @router.message(F.document | F.photo | F.video | F.audio)
 async def handle_upload(message: Message):
@@ -132,32 +133,35 @@ async def handle_upload(message: Message):
         else:
             await message.answer(f"❌ Failed to upload file:\n{result['message']}")
 
-# === FastAPI events ===
 
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
 
+
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
 
+
 @app.get("/")
 async def root():
     return {"status": "ok"}
+
 
 @app.exception_handler(Exception)
 async def exception_handler(request: Request, exc: Exception):
     logging.error(f"Unhandled exception: {exc}")
     return JSONResponse(status_code=500, content={"message": "Internal server error"})
 
-# === AIOHTTP webhook integration ===
 
 app_router = web.RouteTableDef()
+
 
 @app_router.post(WEBHOOK_PATH)
 async def telegram_webhook(request: web.Request):
     return await SimpleRequestHandler(dispatcher=dp, bot=bot).handle(request)
+
 
 setup_application(app, dp, bot=bot)
 app.router.add_routes(app_router)
