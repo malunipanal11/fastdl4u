@@ -13,4 +13,3 @@ services:
         value: 7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq
       - key: WEBHOOK_DOMAIN
         value: https://fastdl4u.onrender.com
-    autoDeploy: true
