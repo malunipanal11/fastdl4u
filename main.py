@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message
+from aiogram.types import Message, Update
 from aiogram.enums import ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
@@ -11,15 +11,16 @@ import requests
 import logging
 from io import BytesIO
 
+# Load .env variables
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # e.g., https://your-service-name.onrender.com
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 if not WEBHOOK_DOMAIN:
-    raise ValueError("WEBHOOK_DOMAIN environment variable not set!")
+    raise ValueError("WEBHOOK_DOMAIN not set!")
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
+WEBHOOK_URL = f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}"
 
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
@@ -41,16 +42,11 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
         server_resp = requests.get("https://api.gofile.io/servers")
         server_resp.raise_for_status()
-        server_json = server_resp.json()
-
-        if server_json.get("status") != "ok" or "data" not in server_json or "server" not in server_json["data"]:
-            raise ValueError(f"Invalid server response: {server_json}")
-
-        server = server_json["data"]["server"]
+        server = server_resp.json()["data"]["server"]
 
         file_bytes.seek(0)
         files = {"file": (filename, file_bytes)}
-        upload_url = f"https://{server}.gofile.io/uploadFile"
+        upload_url = f"https://{server}.gofile.io/upload"
         res = requests.post(upload_url, files=files)
         res.raise_for_status()
 
@@ -65,7 +61,7 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
             uploaded_files[category].append(file_data)
             return {"success": True, "data": file_data}
         else:
-            return {"success": False, "message": result.get("message", "Unknown upload error")}
+            return {"success": False, "message": result.get("message", "Unknown error")}
     except Exception as e:
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
@@ -150,9 +146,13 @@ async def on_shutdown():
 
 
 @app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    update_data = await request.body()
-    await dp.feed_raw_update(bot, update_data, update_type="webhook")
+async def telegram_webhook(update: dict):
+    try:
+        telegram_update = Update.model_validate(update)
+        await dp.feed_update(bot, telegram_update)
+    except Exception as e:
+        logging.exception("Error handling update")
+        return JSONResponse(status_code=500, content={"error": str(e)})
     return {"ok": True}
 
 
