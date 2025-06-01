@@ -1,59 +1,35 @@
-from aiogram import Router, types, F
-from aiogram.types import FSInputFile
-from aiogram.filters import Command
-from io import BytesIO
-from utils import user_categories, upload_to_gofile
+import logging
+import requests
+from aiogram import Router, F
+from aiogram.types import Message
+from aiogram.enums import ContentType
+from config import GOFILE_TOKEN
 
 router = Router()
 
+@router.message(F.text == "/start")
+async def start_handler(message: Message):
+    await message.answer("👋 Hello! Send me a file and I’ll upload it to Gofile.")
 
-@router.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer("👋 Welcome! Use /add <category> and then send me files.")
-
-
-@router.message(Command("add"))
-async def cmd_add(message: types.Message):
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply("❗ Usage: /add <category>")
-        return
-
-    category = args[1]
-    user_categories[message.from_user.id] = category
-    await message.reply(f"📁 Now send files to add in category: {category}")
-
-
-@router.message(F.document | F.photo)
-async def handle_files(message: types.Message):
-    user_id = message.from_user.id
-    category = user_categories.get(user_id)
-
-    if not category:
-        await message.reply("❗ Use /add <category> before sending files.")
-        return
-
-    file_info = None
-    filename = None
-    file_bytes = BytesIO()
-
-    if message.document:
-        file_info = message.document
-        filename = file_info.file_name
-    elif message.photo:
-        file_info = message.photo[-1]
-        filename = f"photo_{file_info.file_id}.jpg"
-
+@router.message(F.content_type.in_({ContentType.DOCUMENT, ContentType.VIDEO, ContentType.AUDIO, ContentType.PHOTO}))
+async def upload_file(message: Message):
+    file = await message.bot.get_file(message.document.file_id)
+    file_path = file.file_path
+    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
+    
     try:
-        tg_file = await message.bot.get_file(file_info.file_id)
-        file = await message.bot.download_file(tg_file.file_path)
-        file_bytes.write(file.read())
+        # Get Gofile server
+        server_resp = requests.get(f"https://api.gofile.io/getServer?token={GOFILE_TOKEN}").json()
+        server = server_resp["data"]["server"]
+        upload_url = f"https://{server}.gofile.io/uploadFile"
 
-        result = upload_to_gofile(file_bytes, filename, category)
+        # Upload to Gofile
+        file_bytes = await message.document.download(destination=bytes)
+        response = requests.post(upload_url, files={"file": file_bytes}, data={"token": GOFILE_TOKEN})
+        response.raise_for_status()
 
-        if result["success"]:
-            await message.reply(f"✅ Uploaded: {result['data']['url']}")
-        else:
-            await message.reply(f"❌ Upload failed: {result['message']}")
+        link = response.json()["data"]["downloadPage"]
+        await message.answer(f"✅ File uploaded:\n{link}")
     except Exception as e:
-        await message.reply("❌ Error during file processing.")
+        logging.exception("Upload failed")
+        await message.answer("❌ Upload failed: " + str(e))
