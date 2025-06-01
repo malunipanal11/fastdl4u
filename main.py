@@ -2,29 +2,30 @@ import os
 import logging
 from io import BytesIO
 from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, types, Router
+from aiogram import Bot, Dispatcher, Router, types
 from aiogram.enums import ParseMode, ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.filters import Command
 import requests
 import uuid
 
-# Config
+# Configuration
 TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or "https://your.domain/webhook"
 
-# Logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 
-# FastAPI App
+# FastAPI app
 app = FastAPI()
 
-# Telegram Bot Setup
+# Telegram Bot setup
 bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
-# In-memory storage
+# In-memory storage for uploaded file metadata
 uploaded_files = {
     "images": [],
     "videos": [],
@@ -32,8 +33,7 @@ uploaded_files = {
     "files": []
 }
 
-
-# File type categorization
+# Detect file type
 def detect_type(filename: str) -> str:
     if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         return "images"
@@ -44,8 +44,7 @@ def detect_type(filename: str) -> str:
     else:
         return "files"
 
-
-# Upload to GoFile using BytesIO
+# Upload file to GoFile.io
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
         server_resp = requests.get("https://api.gofile.io/getServer")
@@ -71,9 +70,8 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
         logging.error(f"Upload failed: {e}")
         return {"success": False, "message": str(e)}
 
-
-# Handler: /start command
-@router.message(commands=["start"])
+# /start command handler
+@router.message(Command("start"))
 async def cmd_start(message: types.Message):
     kb = [
         [types.KeyboardButton(text="Images"), types.KeyboardButton(text="Videos")],
@@ -85,8 +83,7 @@ async def cmd_start(message: types.Message):
         reply_markup=types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     )
 
-
-# Handler: file upload
+# File upload handler
 @router.message(lambda msg: msg.document or msg.photo or msg.video or msg.audio, content_types=ContentType.ANY)
 async def handle_upload(message: types.Message):
     filename = "file"
@@ -130,8 +127,7 @@ async def handle_upload(message: types.Message):
         logging.error(f"Handler error: {e}")
         await message.reply("❌ Error processing file.")
 
-
-# Webhook handler
+# Webhook endpoint
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
@@ -143,8 +139,7 @@ async def handle_webhook(request: Request):
         logging.error(f"Webhook error: {e}")
         return {"ok": False}
 
-
-# Startup hook
+# Startup hook: set webhook
 @app.on_event("startup")
 async def on_startup():
     if not WEBHOOK_URL:
@@ -153,8 +148,7 @@ async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"✅ Webhook set to: {WEBHOOK_URL}")
 
-
-# Shutdown hook
+# Shutdown hook: delete webhook
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
