@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, Update
+from aiogram.types import Message
 from aiogram.enums import ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
@@ -16,11 +16,13 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
+
 if not WEBHOOK_DOMAIN:
-    raise ValueError("WEBHOOK_DOMAIN not set!")
+    raise ValueError("WEBHOOK_DOMAIN environment variable not set!")
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}"
+WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
 
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
@@ -40,28 +42,37 @@ logging.basicConfig(level=logging.INFO)
 
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
-        server_resp = requests.get("https://api.gofile.io/servers")
-        server_resp.raise_for_status()
-        server = server_resp.json()["data"]["server"]
+        headers = {}
+        if GOFILE_TOKEN:
+            headers["Authorization"] = GOFILE_TOKEN
+
+        # Get available server
+        server_resp = requests.get("https://api.gofile.io/getServer", headers=headers)
+        server_data = server_resp.json()
+
+        if server_data["status"] != "ok":
+            raise ValueError(server_data.get("message", "Failed to get server"))
+
+        server = server_data["data"]["server"]
 
         file_bytes.seek(0)
         files = {"file": (filename, file_bytes)}
-        upload_url = f"https://{server}.gofile.io/upload"
-        res = requests.post(upload_url, files=files)
-        res.raise_for_status()
+        upload_url = f"https://{server}.gofile.io/uploadFile"
 
-        result = res.json()
-        if result.get("status") == "ok":
-            file_data = {
+        upload_resp = requests.post(upload_url, headers=headers, files=files)
+        upload_data = upload_resp.json()
+
+        if upload_data["status"] == "ok":
+            file_info = {
                 "id": str(uuid.uuid4()),
                 "name": filename,
-                "url": result["data"]["downloadPage"],
-                "code": result["data"]["code"]
+                "url": upload_data["data"]["downloadPage"],
+                "code": upload_data["data"]["code"]
             }
-            uploaded_files[category].append(file_data)
-            return {"success": True, "data": file_data}
+            uploaded_files[category].append(file_info)
+            return {"success": True, "data": file_info}
         else:
-            return {"success": False, "message": result.get("message", "Unknown error")}
+            return {"success": False, "message": upload_data.get("message", "Upload failed")}
     except Exception as e:
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
@@ -69,7 +80,7 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
-    await message.answer("👋 Welcome! Send me a file and I’ll upload it to GoFile.")
+    await message.answer("👋 Welcome! Send me any file (image, video, doc) and I’ll upload it to GoFile.\n\nUse:\n📸 'Images'\n🎞 'Videos'\n📁 'Add File' to see uploaded items.")
 
 
 @router.message(F.text == "Images")
@@ -146,13 +157,9 @@ async def on_shutdown():
 
 
 @app.post(WEBHOOK_PATH)
-async def telegram_webhook(update: dict):
-    try:
-        telegram_update = Update.model_validate(update)
-        await dp.feed_update(bot, telegram_update)
-    except Exception as e:
-        logging.exception("Error handling update")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+async def telegram_webhook(request: Request):
+    update_data = await request.body()
+    await dp.feed_raw_update(bot, update_data, update_type="webhook")
     return {"ok": True}
 
 
