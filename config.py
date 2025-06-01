@@ -34,3 +34,6 @@ EXPIRE_COMMANDS = {
     "aud": 600,   # 10 minutes
     "code": 30    # Used in /get <code> auto-delete
 }
+
+# --- Webhook URL ---
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://fastdl4u.onrender.com/webhook")
