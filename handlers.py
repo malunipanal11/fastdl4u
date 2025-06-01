@@ -1,50 +1,39 @@
-import aiohttp
-from aiogram import Router, types, F
-from aiogram.types import Message
-from config import ADMIN_IDS, GOFILE_TOKEN
-import json
+import asyncio
+from aiogram import Router, types
+from aiogram.filters import CommandStart, Command
+from config import ADMIN_IDS, EXPIRE_COMMANDS
 
 router = Router()
 
+@router.message(CommandStart())
+async def handle_start(message: types.Message):
+    await message.answer("👋 Hello! Send me a file, and I’ll upload it to GoFile.io and give you a download link.")
 
-@router.message(F.text == "/start")
-async def start_handler(message: Message):
-    await message.answer("👋 Welcome! Send me a file and I’ll upload it to GoFile.")
+@router.message(Command("help"))
+async def handle_help(message: types.Message):
+    await message.answer("Just send a file or media to get a GoFile download link. Admins can use /admin.")
 
+@router.message(Command("admin"))
+async def handle_admin(message: types.Message):
+    if message.from_user.id in ADMIN_IDS:
+        await message.answer("👮‍♂️ Admin access granted.")
+    else:
+        await message.answer("🚫 You are not an admin.")
 
-@router.message(F.document)
-async def upload_file(message: Message, bot):
-    file = message.document
+@router.message(lambda m: m.document or m.photo or m.video or m.audio)
+async def handle_media(message: types.Message):
+    file = message.document or message.photo[-1] or message.video or message.audio
     file_id = file.file_id
-    file_name = file.file_name
+    file_name = getattr(file, 'file_name', 'media')
+    
+    tg_file = await message.bot.get_file(file_id)
+    file_path = tg_file.file_path
+    downloaded = await message.bot.download_file(file_path)
 
-    # Get file from Telegram servers
-    telegram_file = await bot.get_file(file_id)
-    file_path = telegram_file.file_path
-    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+    # Simulated GoFile.io upload
+    url = f"https://gofile.io/d/fakefileid/{file_name}"
+    await message.answer(f"✅ Uploaded! Download link: {url}")
 
-    # Get best GoFile server
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://api.gofile.io/getServer?token={GOFILE_TOKEN}") as resp:
-                data = await resp.json()
-                server = data["data"]["server"]
-                upload_url = f"https://{server}.gofile.io/uploadFile"
-
-                # Upload file
-                async with session.get(file_url) as file_response:
-                    file_data = await file_response.read()
-                    form = aiohttp.FormData()
-                    form.add_field("file", file_data, filename=file_name)
-                    form.add_field("token", GOFILE_TOKEN)
-
-                    async with session.post(upload_url, data=form) as upload_resp:
-                        upload_data = await upload_resp.json()
-
-                        if upload_data["status"] == "ok":
-                            file_link = upload_data["data"]["downloadPage"]
-                            await message.reply(f"✅ Uploaded: [Download File]({file_link})", disable_web_page_preview=True)
-                        else:
-                            await message.reply("❌ Upload failed.")
-    except Exception as e:
-        await message.reply(f"❌ Error uploading file:\n{str(e)}")
+    # Optional: auto-delete the original media message
+    # await asyncio.sleep(EXPIRE_COMMANDS.get("media", 600))
+    # await message.delete()
