@@ -1,39 +1,21 @@
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# Telegram Bot Token
+TOKEN = os.getenv("BOT_TOKEN", "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw")
 
-# --- Telegram Bot Settings ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is not set in the .env file")
+# List of admin user IDs (must be integers)
+ADMIN_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "5558589142").split(",")]
 
-# Admin Telegram user IDs, comma-separated in .env
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
-if not ADMIN_IDS:
-    print("⚠️ Warning: No ADMIN_IDS configured")
+# GoFile API Token
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN", "7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq")
 
-# --- Gofile API Settings ---
-GOFILE_API = "https://api.gofile.io"
-GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-if not GOFILE_TOKEN:
-    print("⚠️ Warning: GOFILE_TOKEN is not set. Uploads may fail.")
-
-# --- File Category Mappings ---
-CATEGORIES = {
-    "images": "Images",
-    "videos": "Videos",
-    "audios": "Audio",
-    "secret": "Secret",
-}
-
-# --- Command Expiration Timers (in seconds) ---
-EXPIRE_COMMANDS = {
-    "img": 300,   # 5 minutes
-    "vid": 600,   # 10 minutes
-    "aud": 600,   # 10 minutes
-    "code": 30    # Used in /get <code> auto-delete
-}
-
-# --- Webhook URL ---
+# Webhook URL
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://fastdl4u.onrender.com/webhook")
+
+# Optional: Default expiry commands per category (in seconds)
+EXPIRE_COMMANDS = {
+    "image": 600,
+    "video": 900,
+    "audio": 900,
+    "code": 600
+}
