@@ -1,46 +1,53 @@
-import logging
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.types import Message
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
+from dotenv import load_dotenv
+import os
 import uuid
+import requests
+import logging
 from io import BytesIO
 
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.enums import ContentType
-from aiogram.types import Message
-from aiogram.client.session.aiohttp import AiohttpSession
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-import requests
-import asyncio
-import os
+# Load environment variables
+load_dotenv()
 
-# ENV & logging
-TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
-logging.basicConfig(level=logging.INFO)
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN") + WEBHOOK_PATH
 
-bot = Bot(token=TOKEN, session=AiohttpSession())
-dp = Dispatcher()
+# Initialize bot and dispatcher
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
+
 app = FastAPI()
 
-# In-memory file store
+# In-memory storage
 uploaded_files = {
-    "Images": [],
-    "Documents": [],
-    "Videos": [],
-    "Audios": []
+    "images": [],
+    "videos": [],
+    "files": []
 }
+
+logging.basicConfig(level=logging.INFO)
 
 # Upload to GoFile
 def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
     try:
-        server_resp = requests.get("https://api.gofile.io/getServer")
+        server_resp = requests.get("https://api.gofile.io/servers")
         server_resp.raise_for_status()
         server = server_resp.json()["data"]["server"]
 
-        file_bytes.seek(0)  # Reset pointer before upload
+        file_bytes.seek(0)
         files = {"file": (filename, file_bytes)}
 
-        upload_url = f"https://{server}.gofile.io/uploadFile"
+        upload_url = f"https://{server}.gofile.io/upload"
         res = requests.post(upload_url, files=files)
         res.raise_for_status()
 
@@ -56,74 +63,101 @@ def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
             return {"success": True, "data": file_data}
         else:
             return {"success": False, "message": result.get("message", "Unknown error")}
-
     except Exception as e:
         logging.exception("Upload failed")
         return {"success": False, "message": str(e)}
 
-# Upload handler
-async def handle_upload(message: Message, file, category: str):
-    try:
-        file_info = await bot.get_file(file.file_id)
-        file_path = file_info.file_path
-        file_bytes = BytesIO()
-        await bot.download_file(file_path, destination=file_bytes)
+# === Handlers ===
 
-        filename = file.file_name if hasattr(file, "file_name") else f"{file.file_id}.bin"
-        result = upload_to_gofile_bytes(file_bytes, filename, category)
-
-        if result["success"]:
-            url = result["data"]["url"]
-            await message.reply(f"✅ File uploaded successfully:\n<a href='{url}'>{filename}</a>", parse_mode="HTML")
-        else:
-            await message.reply(f"❌ Failed to upload file:\n<code>{result['message']}</code>", parse_mode="HTML")
-
-    except Exception as e:
-        logging.exception("handle_upload error")
-        await message.reply(f"❌ Error uploading file:\n<code>{str(e)}</code>", parse_mode="HTML")
-
-# Command /start
 @router.message(F.text == "/start")
-async def start_handler(message: Message):
+async def cmd_start(message: Message):
     await message.answer("👋 Welcome! Use the menu or send a command.")
 
-# Show file links
-@router.message(F.text.in_(["Images", "Documents", "Videos", "Audios"]))
-async def show_category(message: Message):
-    category = message.text
-    files = uploaded_files.get(category, [])
+@router.message(F.text == "Images")
+async def list_images(message: Message):
+    images = uploaded_files.get("images", [])
+    if not images:
+        await message.answer("No images uploaded yet.")
+    else:
+        response = "\n".join(f"{file['name']}: {file['url']}" for file in images)
+        await message.answer(response)
+
+@router.message(F.text == "Videos")
+async def list_videos(message: Message):
+    videos = uploaded_files.get("videos", [])
+    if not videos:
+        await message.answer("No videos uploaded yet.")
+    else:
+        response = "\n".join(f"{file['name']}: {file['url']}" for file in videos)
+        await message.answer(response)
+
+@router.message(F.text == "Add File")
+async def list_files(message: Message):
+    files = uploaded_files.get("files", [])
     if not files:
-        await message.answer(f"No {category.lower()} uploaded yet.")
-        return
-    msg = f"📂 <b>{category}</b> files:\n\n"
-    for f in files:
-        msg += f"• <a href='{f['url']}'>{f['name']}</a>\n"
-    await message.answer(msg, parse_mode="HTML")
+        await message.answer("No files uploaded yet.")
+    else:
+        response = "\n".join(f"{file['name']}: {file['url']}" for file in files)
+        await message.answer(response)
 
-# Handle files: photos, documents, videos, audios
-@router.message(F.photo)
-async def photo_handler(message: Message):
-    await handle_upload(message, message.photo[-1], "Images")
+@router.message(F.document | F.photo | F.video | F.audio)
+async def handle_upload(message: Message):
+    file_type = None
+    file = None
+    filename = ""
 
-@router.message(F.document)
-async def document_handler(message: Message):
-    await handle_upload(message, message.document, "Documents")
+    if message.photo:
+        file_type = "images"
+        file = message.photo[-1]
+        filename = f"photo_{file.file_id}.jpg"
+    elif message.video:
+        file_type = "videos"
+        file = message.video
+        filename = f"video_{file.file_id}.mp4"
+    elif message.document:
+        file_type = "files"
+        file = message.document
+        filename = file.file_name or f"file_{file.file_id}"
+    elif message.audio:
+        file_type = "files"
+        file = message.audio
+        filename = file.file_name or f"audio_{file.file_id}.mp3"
 
-@router.message(F.video)
-async def video_handler(message: Message):
-    await handle_upload(message, message.video, "Videos")
+    if file_type and file:
+        file_obj = await bot.download(file)
+        result = upload_to_gofile_bytes(file_obj, filename, file_type)
 
-@router.message(F.audio)
-async def audio_handler(message: Message):
-    await handle_upload(message, message.audio, "Audios")
+        if result["success"]:
+            await message.answer(f"✅ Uploaded: {filename}\n🔗 {result['data']['url']}")
+        else:
+            await message.answer(f"❌ Failed to upload file:\n{result['message']}")
 
-# FastAPI root
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return "<h1>🚀 Telegram Bot with GoFile Uploader is running!</h1>"
+# === FastAPI events ===
 
-# Start polling
 @app.on_event("startup")
 async def on_startup():
-    loop = asyncio.get_event_loop()
-    loop.create_task(dp.start_polling(bot))
+    await bot.set_webhook(WEBHOOK_URL)
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.delete_webhook()
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+@app.exception_handler(Exception)
+async def exception_handler(request: Request, exc: Exception):
+    logging.error(f"Unhandled exception: {exc}")
+    return JSONResponse(status_code=500, content={"message": "Internal server error"})
+
+# === AIOHTTP webhook integration ===
+
+app_router = web.RouteTableDef()
+
+@app_router.post(WEBHOOK_PATH)
+async def telegram_webhook(request: web.Request):
+    return await SimpleRequestHandler(dispatcher=dp, bot=bot).handle(request)
+
+setup_application(app, dp, bot=bot)
+app.router.add_routes(app_router)
