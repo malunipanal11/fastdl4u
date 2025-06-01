@@ -1,58 +1,161 @@
 import os
 import logging
+from io import BytesIO
 from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, Router
+from aiogram.enums import ParseMode, ContentType
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.enums import ParseMode
-from starlette.responses import JSONResponse
+import requests
+import uuid
 
-from config import TOKEN, WEBHOOK_URL
-from handlers import register_handlers
-from gofile import load_from_disk, save_to_disk
+# Config
+TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") or "https://your.domain/webhook"
 
-# Configure logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 
-# Initialize bot and dispatcher
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher(storage=MemoryStorage())
-
-# Initialize FastAPI app
+# FastAPI App
 app = FastAPI()
 
-# Register bot command/message handlers
-register_handlers(dp)
+# Telegram Bot Setup
+bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher(storage=MemoryStorage())
+router = Router()
+dp.include_router(router)
 
-# Load persisted data on startup
-@app.on_event("startup")
-async def on_startup():
-    if not WEBHOOK_URL:
-        logging.warning("WEBHOOK_URL not set.")
+# In-memory storage
+uploaded_files = {
+    "images": [],
+    "videos": [],
+    "audios": [],
+    "files": []
+}
+
+
+# File type categorization
+def detect_type(filename: str) -> str:
+    if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return "images"
+    elif filename.lower().endswith((".mp4", ".mov", ".mkv")):
+        return "videos"
+    elif filename.lower().endswith((".mp3", ".wav", ".ogg")):
+        return "audios"
+    else:
+        return "files"
+
+
+# Upload to GoFile using BytesIO
+def upload_to_gofile_bytes(file_bytes: BytesIO, filename: str, category: str):
+    try:
+        server_resp = requests.get("https://api.gofile.io/getServer")
+        server = server_resp.json()["data"]["server"]
+
+        files = {"file": (filename, file_bytes)}
+        upload_url = f"https://{server}.gofile.io/uploadFile"
+        res = requests.post(upload_url, files=files)
+
+        result = res.json()
+        if result.get("status") == "ok":
+            file_data = {
+                "id": str(uuid.uuid4()),
+                "name": filename,
+                "url": result["data"]["downloadPage"],
+                "code": result["data"]["code"]
+            }
+            uploaded_files[category].append(file_data)
+            return {"success": True, "data": file_data}
+        else:
+            return {"success": False, "message": result.get("message")}
+    except Exception as e:
+        logging.error(f"Upload failed: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# Handler: /start command
+@router.message(commands=["start"])
+async def cmd_start(message: types.Message):
+    kb = [
+        [types.KeyboardButton(text="Images"), types.KeyboardButton(text="Videos")],
+        [types.KeyboardButton(text="Audio"), types.KeyboardButton(text="Add File")],
+        [types.KeyboardButton(text="Add Secret"), types.KeyboardButton(text="Add Link")]
+    ]
+    await message.answer(
+        "👋 Welcome! Use the menu or send a command.",
+        reply_markup=types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    )
+
+
+# Handler: file upload
+@router.message(lambda msg: msg.document or msg.photo or msg.video or msg.audio, content_types=ContentType.ANY)
+async def handle_upload(message: types.Message):
+    filename = "file"
+    file_id = None
+
+    if message.document:
+        file_id = message.document.file_id
+        filename = message.document.file_name
+    elif message.photo:
+        file_id = message.photo[-1].file_id
+        filename = "photo.jpg"
+    elif message.video:
+        file_id = message.video.file_id
+        filename = "video.mp4"
+    elif message.audio:
+        file_id = message.audio.file_id
+        filename = message.audio.file_name or "audio.mp3"
+    else:
+        await message.reply("❌ No valid file found.")
         return
 
-    # Load GoFile state from disk
-    load_from_disk()
+    try:
+        tg_file = await bot.get_file(file_id)
+        file_path = tg_file.file_path
+        file_content = await bot.download_file(file_path)
+        file_bytes = BytesIO(file_content.read())
 
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"✅ Webhook set to: {WEBHOOK_URL}")
+        category = detect_type(filename)
+        result = upload_to_gofile_bytes(file_bytes, filename, category)
+
+        if result["success"]:
+            data = result["data"]
+            await message.reply(
+                f"✅ File uploaded!\n"
+                f"🔗 <code>{data['url']}</code>\n"
+                f"🆔 Code: <code>{data['code']}</code>"
+            )
+        else:
+            await message.reply("❌ Failed to upload file.")
+    except Exception as e:
+        logging.error(f"Handler error: {e}")
+        await message.reply("❌ Error processing file.")
 
 
-# Clean shutdown
-@app.on_event("shutdown")
-async def on_shutdown():
-    await bot.delete_webhook()
-    save_to_disk()
-    logging.info("🛑 Webhook deleted. Data saved.")
-
-
-# Webhook endpoint for Telegram
+# Webhook handler
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
         data = await request.json()
         update = types.Update.model_validate(data)
         await dp._process_update(bot=bot, update=update)
-        return JSONResponse(content={"ok": True})
+        return {"ok": True}
     except Exception as e:
         logging.error(f"Webhook error: {e}")
-        return JSONResponse(content={"ok": False}, status_code=500)
+        return {"ok": False}
+
+
+# Startup hook
+@app.on_event("startup")
+async def on_startup():
+    if not WEBHOOK_URL:
+        logging.warning("WEBHOOK_URL not set.")
+        return
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"✅ Webhook set to: {WEBHOOK_URL}")
+
+
+# Shutdown hook
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.delete_webhook()
+    logging.info("🛑 Webhook deleted.")
