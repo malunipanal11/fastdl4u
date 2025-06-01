@@ -1,18 +1,18 @@
 import os
 
-# Telegram Bot Token
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw")
+# Telegram Bot Token (required)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "your-bot-token")
 
-# Admin User IDs
-ADMIN_IDS = [int(uid.strip()) for uid in os.getenv("ADMIN_IDS", "5558589142").split(",") if uid.strip().isdigit()]
+# Webhook URL (Render uses this for receiving updates)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-app.onrender.com/webhook")
 
-# GoFile API Token
-GOFILE_TOKEN = os.getenv("GOFILE_TOKEN", "7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq")
+# GoFile API Token (for real uploads, optional here)
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN", "your-gofile-token")
 
-# Webhook URL
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN", "https://fastdl4u.onrender.com")
+# Admin User IDs (comma-separated string in env, parsed to list of ints)
+ADMIN_IDS = [int(uid.strip()) for uid in os.getenv("ADMIN_IDS", "123456789").split(",") if uid.strip().isdigit()]
 
-# Message expiration settings
+# Expiry times for auto-deleting messages (per content type)
 EXPIRE_COMMANDS = {
     "image": 600,
     "video": 900,
