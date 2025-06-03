@@ -1,178 +1,206 @@
 import os
-import random
-import sqlite3
-import aiohttp
-from dotenv import load_dotenv
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import json
+import asyncio
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    CallbackQueryHandler
 )
 
-from fastapi import FastAPI, Request
+# === CONFIG ===
 
-# --- Load env variables ---
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
+ADMIN_IDS = [5558589142]  # Replace with your actual Telegram user ID
+DB_PATH = "data/db.json"
+CATEGORY_PATHS = {
+    "images": "data/images",
+    "videos": "data/videos",
+    "audios": "data/audios",
+    "files": "data/files",
+    "text": "data/text"
+}
 
-# --- Database Setup ---
-conn = sqlite3.connect("files.db", check_same_thread=False)
-cur = conn.cursor()
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS files (
-        serial INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_name TEXT,
-        file_type TEXT,
-        gofile_link TEXT,
-        tg_file_id TEXT
-    )
-""")
-conn.commit()
+# === UTILS ===
 
-# --- Async GoFile Upload Function ---
-async def upload_to_gofile(file_bytes, file_name):
-    url = "https://api.gofile.io/uploadFile"
-    data = aiohttp.FormData()
-    data.add_field('file', file_bytes, filename=file_name)
-    params = {"token": GOFILE_TOKEN}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=data, params=params) as resp:
-            resp.raise_for_status()
-            json_resp = await resp.json()
-            return json_resp["data"]["downloadPage"]
+def load_db():
+    if not os.path.exists(DB_PATH):
+        return {}
+    with open(DB_PATH, "r") as f:
+        return json.load(f)
 
-# --- Detect File Type ---
-def detect_file_type(file_name, mime_type):
-    ext = file_name.lower().split('.')[-1]
-    if ext in ["jpg", "jpeg", "png", "gif"]:
-        return "image"
-    if ext in ["mp4", "avi", "mov"]:
-        return "video"
-    if ext in ["mp3", "wav", "ogg"]:
-        return "audio"
-    if ext in ["pdf", "txt"]:
-        return "text"
-    if ext in ["url", "link"]:
-        return "link"
-    return "other"
+def save_db(db):
+    with open(DB_PATH, "w") as f:
+        json.dump(db, f, indent=2)
 
-# --- Bot Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to the Telegram Storage Bot!")
+def get_next_serial():
+    db = load_db()
+    serial = str(len(db) + 1).zfill(4)
+    return serial
 
+def save_file(file_bytes, filename, category, extension):
+    serial = get_next_serial()
+    path = CATEGORY_PATHS[category]
+    os.makedirs(path, exist_ok=True)
+    full_filename = f"{serial}_{filename}.{extension}"
+    full_path = os.path.join(path, full_filename)
+    with open(full_path, "wb") as f:
+        f.write(file_bytes)
+    db = load_db()
+    db[serial] = {
+        "file": full_filename,
+        "category": category,
+        "time": datetime.utcnow().isoformat()
+    }
+    save_db(db)
+    return serial, full_path
+
+def admin_only(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id not in ADMIN_IDS:
+            await update.message.reply_text("Admin only.")
+            return
+        return await func(update, context)
+    return wrapper
+
+# === HANDLERS ===
+
+@admin_only
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.document:
-        await update.message.reply_text("Please send a file with this command.")
+        await update.message.reply_text("Upload a file after using /add.")
         return
-
-    file = update.message.document
-    file_name = file.file_name or f"file_{file.file_id}"
-    file_type = detect_file_type(file_name, file.mime_type)
-    tg_file = await context.bot.get_file(file.file_id)
-    file_bytes = await tg_file.download_as_bytearray()
-    gofile_link = await upload_to_gofile(file_bytes, file_name)
-
-    cur.execute(
-        "INSERT INTO files (file_name, file_type, gofile_link, tg_file_id) VALUES (?, ?, ?, ?)",
-        (file_name, file_type, gofile_link, file.file_id)
+    doc = update.message.document
+    ext = doc.file_name.split(".")[-1].lower()
+    category = (
+        "images" if ext in ["jpg", "png", "jpeg", "gif"] else
+        "videos" if ext in ["mp4", "mov", "mkv"] else
+        "audios" if ext in ["mp3", "ogg", "wav"] else
+        "files" if ext in ["pdf", "zip", "rar"] else
+        "text" if ext in ["txt", "md"] else None
     )
-    conn.commit()
-    serial = cur.lastrowid
-    await update.message.reply_text(f"File uploaded! Serial: {serial}")
-
-async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cmd = update.message.text.lstrip("/").replace("list", "")
-    typemap = {"img": "image", "vid": "video", "aud": "audio", "text": "text", "link": "link"}
-    file_type = typemap.get(cmd)
-
-    cur.execute("SELECT serial, file_name, gofile_link FROM files WHERE file_type=?", (file_type,))
-    files = cur.fetchall()
-
-    if not files:
-        await update.message.reply_text("No files found.")
+    if not category:
+        await update.message.reply_text("Unsupported file type.")
         return
 
-    for serial, name, link in files:
-        kb = [
-            [InlineKeyboardButton("Download", url=link),
-             InlineKeyboardButton("Delete", callback_data=f"del_{serial}")]
+    file = await doc.get_file()
+    file_bytes = await file.download_as_bytearray()
+    serial, _ = save_file(file_bytes, doc.file_name.rsplit('.', 1)[0], category, ext)
+    await update.message.reply_text(f"Saved in /{category} with serial #{serial}")
+
+async def send_from_category(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str):
+    files = os.listdir(CATEGORY_PATHS[category])
+    if not files:
+        await update.message.reply_text(f"No files in {category}.")
+        return
+    latest = sorted(files)[-1]
+    path = os.path.join(CATEGORY_PATHS[category], latest)
+    if category == "text":
+        with open(path, "r") as f:
+            sent = await update.message.reply_text(f.read())
+    else:
+        sent = await update.message.reply_document(open(path, "rb"))
+    await asyncio.sleep(30)
+    await update.message.delete()
+    await asyncio.sleep(600)
+    await sent.delete()
+
+async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str, page: int = 0):
+    files = sorted(os.listdir(CATEGORY_PATHS[category]))
+    if not files:
+        await update.message.reply_text("No files.")
+        return
+    start = page * 25
+    end = start + 25
+    keyboard = []
+    for f in files[start:end]:
+        serial = f.split("_")[0]
+        btns = [
+            InlineKeyboardButton("📥 Download", callback_data=f"download:{category}:{serial}"),
+            InlineKeyboardButton("▶️ Play", callback_data=f"play:{category}:{serial}"),
+            InlineKeyboardButton("📤 Send", callback_data=f"send:{category}:{serial}")
         ]
-        await update.message.reply_text(f"{serial}: {name}", reply_markup=InlineKeyboardMarkup(kb))
+        if update.effective_user.id in ADMIN_IDS:
+            btns.append(InlineKeyboardButton("❌ Delete", callback_data=f"delete:{category}:{serial}"))
+        keyboard.append(btns)
+    nav_btns = []
+    if start > 0:
+        nav_btns.append(InlineKeyboardButton("◀️ Prev", callback_data=f"page:{category}:{page - 1}"))
+    if end < len(files):
+        nav_btns.append(InlineKeyboardButton("▶️ Next", callback_data=f"page:{category}:{page + 1}"))
+    if nav_btns:
+        keyboard.append(nav_btns)
+    await update.message.reply_text(
+        f"List of {category} files (Page {page + 1})",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-async def delete_later(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.delete_message(chat_id=context.job.chat_id, message_id=context.job.data)
-
-async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cmd = update.message.text.lstrip("/").replace("s", "")
-    cur.execute("SELECT serial, gofile_link FROM files WHERE file_type=?", (cmd,))
-    files = cur.fetchall()
-
-    if not files:
-        await update.message.reply_text("No files found.")
+async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    action, category, serial = data.split(":") if data.startswith("page") else data.split(":", 2)
+    path = None
+    for fname in os.listdir(CATEGORY_PATHS[category]):
+        if fname.startswith(serial):
+            path = os.path.join(CATEGORY_PATHS[category], fname)
+            break
+    if not path or not os.path.exists(path):
+        await query.message.reply_text("File not found.")
         return
+    if action in ["download", "play", "send"]:
+        await query.message.reply_document(InputFile(path))
+    elif action == "delete" and query.from_user.id in ADMIN_IDS:
+        os.remove(path)
+        db = load_db()
+        db.pop(serial, None)
+        save_db(db)
+        await query.message.reply_text(f"Deleted file #{serial} from {category}.")
+    elif action == "page":
+        await list_files(query.message, context, category, int(serial))
 
-    serial, link = random.choice(files)
-    msg = await update.message.reply_text(f"Random file: {link} (serial: {serial})")
-    await context.job_queue.run_once(delete_later, 600, data=msg.message_id, chat_id=msg.chat_id)
-
-async def get(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1 or not context.args[0].isdigit():
+async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
         await update.message.reply_text("Usage: /get <serial>")
         return
-
-    serial = int(context.args[0])
-    cur.execute("SELECT gofile_link FROM files WHERE serial=?", (serial,))
-    row = cur.fetchone()
-
-    if not row:
-        await update.message.reply_text("File not found.")
+    serial = context.args[0]
+    db = load_db()
+    if serial not in db:
+        await update.message.reply_text("Serial not found.")
         return
+    meta = db[serial]
+    if meta["category"] not in ["files", "text"]:
+        await update.message.reply_text("/get only allowed for files or text category.")
+        return
+    path = os.path.join(CATEGORY_PATHS[meta["category"]], meta["file"])
+    if meta["category"] == "text":
+        with open(path, "r") as f:
+            await update.message.reply_text(f.read())
+    else:
+        await update.message.reply_document(open(path, "rb"))
 
-    msg = await update.message.reply_text(f"File: {row[0]}")
-    await context.job_queue.run_once(delete_later, 1800, data=msg.message_id, chat_id=msg.chat_id)
+# === MAIN ===
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.data.startswith("del_"):
-        serial = int(query.data.split("_")[1])
-        cur.execute("DELETE FROM files WHERE serial=?", (serial,))
-        conn.commit()
-        await query.edit_message_text("File deleted.")
+if __name__ == "__main__":
+    app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
 
-# --- FastAPI & Bot Setup ---
-app = FastAPI()
-bot_app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
+    app.add_handler(CommandHandler("videos", lambda u, c: send_from_category(u, c, "videos")))
+    app.add_handler(CommandHandler("audios", lambda u, c: send_from_category(u, c, "audios")))
+    app.add_handler(CommandHandler("files", lambda u, c: send_from_category(u, c, "files")))
+    app.add_handler(CommandHandler("text", lambda u, c: send_from_category(u, c, "text")))
 
-# Register handlers
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("imglist", lambda u, c: list_files(u, c, "images")))
+    app.add_handler(CommandHandler("vidlist", lambda u, c: list_files(u, c, "videos")))
+    app.add_handler(CommandHandler("fileslist", lambda u, c: list_files(u, c, "files")))
+    app.add_handler(CommandHandler("audlist", lambda u, c: list_files(u, c, "audios")))   # ✅ NEW
+    app.add_handler(CommandHandler("textlist", lambda u, c: list_files(u, c, "text")))    # ✅ NEW
 
-for cmd in ["imglist", "vidlist", "audlist", "textlist", "linklist"]:
-    bot_app.add_handler(CommandHandler(cmd, list_files))
+    app.add_handler(CommandHandler("get", get_file))
+    app.add_handler(CallbackQueryHandler(handle_cb))
 
-for cmd in ["images", "videos", "audio"]:
-    bot_app.add_handler(CommandHandler(cmd, random_file))
-
-bot_app.add_handler(CommandHandler("get", get))
-bot_app.add_handler(CallbackQueryHandler(button))
-
-@app.on_event("startup")
-async def on_startup():
-    await bot_app.initialize()
-    await bot_app.start()
-    await bot_app.bot.set_webhook(f"{WEBHOOK_DOMAIN}/webhook")
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await bot_app.stop()
-    await bot_app.shutdown()
-
-@app.post("/webhook")
-async def handle_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot_app.bot)
-    await bot_app.process_update(update)
-    return {"ok": True}
+    app.run_polling()
