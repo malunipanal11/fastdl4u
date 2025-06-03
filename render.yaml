@@ -2,14 +2,12 @@ services:
   - type: web
     name: telegram-bot
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn bot:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn bot:app --host 0.0.0.0 --port 10000
     envVars:
       - key: BOT_TOKEN
         value: 8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw
-      - key: ADMIN_IDS
-        value: 5558589142
-      - key: GOFILE_TOKEN
-        value: 7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq
-      - key: WEBHOOK_DOMAIN
-        value: https://fastdl4u.onrender.com
+      - key: WEBHOOK_URL
+        value: https://fastdl4u.onrender.com/webhook
+    autoDeploy: true
