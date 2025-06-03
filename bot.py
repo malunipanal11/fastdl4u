@@ -1,169 +1,161 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
-from aiogram.enums import ContentType
-import asyncio
-import functools
-import logging
+import os
+import random
+import sqlite3
+import aiohttp
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, filters,
+    ContextTypes, CallbackQueryHandler
+)
+from dotenv import load_dotenv
 
-from config import ADMIN_IDS, EXPIRE_COMMANDS
-from gofile import upload_to_gofile, get_random_file, get_file_by_code, get_all_files_by_type, delete_file
+# --- Load environment variables ---
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 
-router = Router()
-logging.basicConfig(level=logging.INFO)
+# --- Database Setup ---
+conn = sqlite3.connect("files.db", check_same_thread=False)
+cur = conn.cursor()
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS files (
+        serial INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_name TEXT,
+        file_type TEXT,
+        gofile_link TEXT,
+        tg_file_id TEXT
+    )
+""")
+conn.commit()
 
-# --- Button layouts ---
+# --- Async GoFile Upload Function ---
+async def upload_to_gofile(file_bytes, file_name):
+    url = "https://api.gofile.io/uploadFile"
+    data = aiohttp.FormData()
+    data.add_field('file', file_bytes, filename=file_name)
+    params = {"token": GOFILE_TOKEN}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=data, params=params) as resp:
+            resp.raise_for_status()
+            json_resp = await resp.json()
+            return json_resp["data"]["downloadPage"]
 
-def get_admin_controls(file_id):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="▶ Play", callback_data=f"play_{file_id}"),
-            InlineKeyboardButton(text="📥 Download", callback_data=f"download_{file_id}"),
-            InlineKeyboardButton(text="❌ Delete", callback_data=f"delete_{file_id}")
-        ]
-    ])
+# --- Helper Function to Detect File Type ---
+def detect_file_type(file_name, mime_type):
+    ext = file_name.lower().split('.')[-1]
+    if ext in ["jpg", "jpeg", "png", "gif"]:
+        return "image"
+    if ext in ["mp4", "avi", "mov"]:
+        return "video"
+    if ext in ["mp3", "wav", "ogg"]:
+        return "audio"
+    if ext in ["pdf", "txt"]:
+        return "text"
+    if ext in ["url", "link"]:
+        return "link"
+    return "other"
 
-def get_user_controls(file_id):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="▶ View", callback_data=f"play_{file_id}")]
-    ])
+# --- Command Handlers ---
 
-# --- Handler Registration ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Welcome to the Telegram Storage Bot!")
 
-def register_handlers(dp):
-    dp.include_router(router)
-
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    is_admin = message.from_user.id in ADMIN_IDS
-    text = "👋 Welcome! Use the menu or send a command."
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🖼 Images", callback_data="img"),
-            InlineKeyboardButton(text="🎞 Videos", callback_data="vid"),
-            InlineKeyboardButton(text="🎧 Audio", callback_data="aud")
-        ]
-    ])
-    if is_admin:
-        kb.inline_keyboard.append([
-            InlineKeyboardButton(text="➕ Add File", callback_data="addfile"),
-            InlineKeyboardButton(text="🔒 Add Secret", callback_data="addsecret"),
-            InlineKeyboardButton(text="🔗 Add Link", callback_data="addlink")
-        ])
-    await message.answer(text, reply_markup=kb)
-
-@router.message(Command("img"))
-async def handle_img(message: Message):
-    await send_random_file(message, "images")
-
-@router.message(Command("vid"))
-async def handle_vid(message: Message):
-    await send_random_file(message, "videos")
-
-@router.message(Command("aud"))
-async def handle_aud(message: Message):
-    await send_random_file(message, "audios")
-
-async def send_random_file(message: Message, category: str):
-    file = get_random_file(category)
-    if not file:
-        await message.answer("No files found.")
+async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.document:
+        await update.message.reply_text("Please send a file with this command.")
         return
-    kb = get_admin_controls(file["id"]) if message.from_user.id in ADMIN_IDS else get_user_controls(file["id"])
-    sent = await message.answer(file["url"], reply_markup=kb)
-    await asyncio.sleep(EXPIRE_COMMANDS.get(category[:-1], 600))
-    try:
-        await sent.delete()
-    except:
-        pass
 
-@router.message(F.text.startswith("/get "))
-async def cmd_get_code(message: Message):
-    code = message.text.split("/get ")[1].strip()
-    file = get_file_by_code(code)
-    if not file:
-        await message.answer("Invalid code.")
-        return
-    kb = get_user_controls(file["id"])
-    sent = await message.answer(file["url"], reply_markup=kb)
-    await asyncio.sleep(EXPIRE_COMMANDS["code"])
-    try:
-        await sent.delete()
-        await message.delete()
-    except:
-        pass
+    file = update.message.document
+    file_name = file.file_name or f"file_{file.file_id}"
+    file_type = detect_file_type(file_name, file.mime_type)
+    tg_file = await context.bot.get_file(file.file_id)
+    file_bytes = await tg_file.download_as_bytearray()
+    gofile_link = await upload_to_gofile(file_bytes, file_name)
 
-@router.message(Command("secret"))
-async def list_secret(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("You are not authorized.")
-        return
-    files = get_all_files_by_type("secret")
+    cur.execute(
+        "INSERT INTO files (file_name, file_type, gofile_link, tg_file_id) VALUES (?, ?, ?, ?)",
+        (file_name, file_type, gofile_link, file.file_id)
+    )
+    conn.commit()
+    serial = cur.lastrowid
+    await update.message.reply_text(f"File uploaded! Serial: {serial}")
+
+async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cmd = update.message.text.lstrip("/").replace("list", "")
+    typemap = {"img": "image", "vid": "video", "aud": "audio", "text": "text", "link": "link"}
+    file_type = typemap.get(cmd)
+    
+    cur.execute("SELECT serial, file_name, gofile_link FROM files WHERE file_type=?", (file_type,))
+    files = cur.fetchall()
+    
     if not files:
-        await message.answer("No secret files.")
+        await update.message.reply_text("No files found.")
         return
-    for file in files:
-        kb = get_admin_controls(file["id"])
-        await message.answer(f"{file['url']} | Code: {file['code']}", reply_markup=kb)
+    
+    for serial, name, link in files:
+        kb = [
+            [InlineKeyboardButton("Download", url=link),
+             InlineKeyboardButton("Delete", callback_data=f"del_{serial}")]
+        ]
+        await update.message.reply_text(f"{serial}: {name}", reply_markup=InlineKeyboardMarkup(kb))
 
-upload_waiting = {}
+async def delete_later(context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.delete_message(chat_id=context.job.chat_id, message_id=context.job.data)
 
-@router.callback_query(F.data)
-async def callbacks(call: CallbackQuery):
-    data = call.data
-    user_id = call.from_user.id
-
-    if data in ["img", "vid", "aud"]:
-        await call.answer()
-        await send_random_file(call.message, {"img": "images", "vid": "videos", "aud": "audios"}[data])
-
-    elif data.startswith("play_") or data.startswith("download_"):
-        await call.answer("Feature coming soon!")
-
-    elif data.startswith("delete_") and user_id in ADMIN_IDS:
-        file_id = data.split("_", 1)[1]
-        delete_file(file_id)
-        await call.message.delete()
-
-    elif data == "addfile" and user_id in ADMIN_IDS:
-        upload_waiting[user_id] = "file"
-        await call.message.answer("📤 Please send the file to upload.")
-
-@router.message(F.content_type.in_({
-    ContentType.PHOTO,
-    ContentType.VIDEO,
-    ContentType.AUDIO,
-    ContentType.DOCUMENT
-}))
-async def handle_file_upload(message: Message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS or upload_waiting.get(user_id) != "file":
+async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cmd = update.message.text.lstrip("/").replace("s", "")
+    cur.execute("SELECT serial, gofile_link FROM files WHERE file_type=?", (cmd,))
+    files = cur.fetchall()
+    
+    if not files:
+        await update.message.reply_text("No files found.")
         return
 
-    file = None
-    if message.photo:
-        file = await message.bot.get_file(message.photo[-1].file_id)
-    elif message.video:
-        file = await message.bot.get_file(message.video.file_id)
-    elif message.audio:
-        file = await message.bot.get_file(message.audio.file_id)
-    elif message.document:
-        file = await message.bot.get_file(message.document.file_id)
+    serial, link = random.choice(files)
+    msg = await update.message.reply_text(f"Random file: {link} (serial: {serial})")
+    await context.job_queue.run_once(delete_later, 600, data=msg.message_id, chat_id=msg.chat_id)
 
-    if not file:
-        await message.answer("❌ File not supported.")
+async def get(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.message.reply_text("Usage: /get <serial>")
         return
 
-    file_path = file.file_path
-    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_path}"
-    logging.info(f"Uploading file from URL: {file_url}")
+    serial = int(context.args[0])
+    cur.execute("SELECT gofile_link FROM files WHERE serial=?", (serial,))
+    row = cur.fetchone()
 
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, functools.partial(upload_to_gofile, file_url))
+    if not row:
+        await update.message.reply_text("File not found.")
+        return
 
-    if response["success"]:
-        await message.answer(f"✅ Uploaded to GoFile: {response['data']['downloadPage']}")
-    else:
-        await message.answer("❌ Upload failed.")
+    msg = await update.message.reply_text(f"File: {row[0]}")
+    await context.job_queue.run_once(delete_later, 1800, data=msg.message_id, chat_id=msg.chat_id)
 
-    upload_waiting.pop(user_id, None)
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.data.startswith("del_"):
+        serial = int(query.data.split("_")[1])
+        cur.execute("DELETE FROM files WHERE serial=?", (serial,))
+        conn.commit()
+        await query.edit_message_text("File deleted.")
+
+# --- Bot Initialization ---
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add))
+
+    for cmd in ["imglist", "vidlist", "audlist", "textlist", "linklist"]:
+        app.add_handler(CommandHandler(cmd, list_files))
+
+    for cmd in ["images", "videos", "audio"]:
+        app.add_handler(CommandHandler(cmd, random_file))
+
+    app.add_handler(CommandHandler("get", get))
+    app.add_handler(CallbackQueryHandler(button))
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
