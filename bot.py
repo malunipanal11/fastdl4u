@@ -3,18 +3,20 @@ import random
 import sqlite3
 import aiohttp
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters,
-    ContextTypes, CallbackQueryHandler
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
 )
+
 from fastapi import FastAPI, Request
 
-# --- Load environment variables ---
+# --- Load env variables ---
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # example: https://your-app-name.onrender.com
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 
 # --- Database Setup ---
 conn = sqlite3.connect("files.db", check_same_thread=False)
@@ -42,7 +44,7 @@ async def upload_to_gofile(file_bytes, file_name):
             json_resp = await resp.json()
             return json_resp["data"]["downloadPage"]
 
-# --- Helper Function ---
+# --- Detect File Type ---
 def detect_file_type(file_name, mime_type):
     ext = file_name.lower().split('.')[-1]
     if ext in ["jpg", "jpeg", "png", "gif"]:
@@ -57,7 +59,7 @@ def detect_file_type(file_name, mime_type):
         return "link"
     return "other"
 
-# --- Telegram Handlers ---
+# --- Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome to the Telegram Storage Bot!")
 
@@ -65,6 +67,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.document:
         await update.message.reply_text("Please send a file with this command.")
         return
+
     file = update.message.document
     file_name = file.file_name or f"file_{file.file_id}"
     file_type = detect_file_type(file_name, file.mime_type)
@@ -87,9 +90,11 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cur.execute("SELECT serial, file_name, gofile_link FROM files WHERE file_type=?", (file_type,))
     files = cur.fetchall()
+
     if not files:
         await update.message.reply_text("No files found.")
         return
+
     for serial, name, link in files:
         kb = [
             [InlineKeyboardButton("Download", url=link),
@@ -104,9 +109,11 @@ async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cmd = update.message.text.lstrip("/").replace("s", "")
     cur.execute("SELECT serial, gofile_link FROM files WHERE file_type=?", (cmd,))
     files = cur.fetchall()
+
     if not files:
         await update.message.reply_text("No files found.")
         return
+
     serial, link = random.choice(files)
     msg = await update.message.reply_text(f"Random file: {link} (serial: {serial})")
     await context.job_queue.run_once(delete_later, 600, data=msg.message_id, chat_id=msg.chat_id)
@@ -115,12 +122,15 @@ async def get(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1 or not context.args[0].isdigit():
         await update.message.reply_text("Usage: /get <serial>")
         return
+
     serial = int(context.args[0])
     cur.execute("SELECT gofile_link FROM files WHERE serial=?", (serial,))
     row = cur.fetchone()
+
     if not row:
         await update.message.reply_text("File not found.")
         return
+
     msg = await update.message.reply_text(f"File: {row[0]}")
     await context.job_queue.run_once(delete_later, 1800, data=msg.message_id, chat_id=msg.chat_id)
 
@@ -132,10 +142,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await query.edit_message_text("File deleted.")
 
-# --- FastAPI & Application ---
+# --- FastAPI & Bot Setup ---
 app = FastAPI()
 bot_app = Application.builder().token(TOKEN).build()
 
+# Register handlers
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("add", add))
 
@@ -150,12 +161,18 @@ bot_app.add_handler(CallbackQueryHandler(button))
 
 @app.on_event("startup")
 async def on_startup():
-    bot = Bot(token=TOKEN)
-    await bot.set_webhook(f"{WEBHOOK_DOMAIN}/webhook")
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.bot.set_webhook(f"{WEBHOOK_DOMAIN}/webhook")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot_app.stop()
+    await bot_app.shutdown()
 
 @app.post("/webhook")
-async def handle_webhook(req: Request):
-    data = await req.json()
+async def handle_webhook(request: Request):
+    data = await request.json()
     update = Update.de_json(data, bot_app.bot)
     await bot_app.process_update(update)
     return {"ok": True}
