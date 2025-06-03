@@ -185,7 +185,7 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === MAIN ===
 
 if __name__ == "__main__":
-    app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
+    app = ApplicationBuilder().token("8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw").build()
 
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
