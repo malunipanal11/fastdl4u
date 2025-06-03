@@ -2,19 +2,19 @@ import os
 import json
 import asyncio
 from datetime import datetime
+from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    CallbackQueryHandler
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, ContextTypes, filters
 )
 
 # === CONFIG ===
 
-ADMIN_IDS = [5558589142]  # Replace with your actual Telegram user ID
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., https://your-service.onrender.com/webhook
+
+ADMIN_IDS = [123456789]  # Replace with your Telegram user ID
 DB_PATH = "data/db.json"
 CATEGORY_PATHS = {
     "images": "data/images",
@@ -85,7 +85,6 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not category:
         await update.message.reply_text("Unsupported file type.")
         return
-
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
     serial, _ = save_file(file_bytes, doc.file_name.rsplit('.', 1)[0], category, ext)
@@ -133,10 +132,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE, categor
         nav_btns.append(InlineKeyboardButton("▶️ Next", callback_data=f"page:{category}:{page + 1}"))
     if nav_btns:
         keyboard.append(nav_btns)
-    await update.message.reply_text(
-        f"List of {category} files (Page {page + 1})",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text(f"List of {category} files (Page {page + 1})", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -182,25 +178,34 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_document(open(path, "rb"))
 
-# === MAIN ===
+# === FASTAPI + TELEGRAM APP ===
 
-if __name__ == "__main__":
-    app = ApplicationBuilder().token("8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw").build()
+application = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
-    app.add_handler(CommandHandler("videos", lambda u, c: send_from_category(u, c, "videos")))
-    app.add_handler(CommandHandler("audios", lambda u, c: send_from_category(u, c, "audios")))
-    app.add_handler(CommandHandler("files", lambda u, c: send_from_category(u, c, "files")))
-    app.add_handler(CommandHandler("text", lambda u, c: send_from_category(u, c, "text")))
+application.add_handler(CommandHandler("add", add))
+application.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
+application.add_handler(CommandHandler("videos", lambda u, c: send_from_category(u, c, "videos")))
+application.add_handler(CommandHandler("audios", lambda u, c: send_from_category(u, c, "audios")))
+application.add_handler(CommandHandler("files", lambda u, c: send_from_category(u, c, "files")))
+application.add_handler(CommandHandler("text", lambda u, c: send_from_category(u, c, "text")))
+application.add_handler(CommandHandler("imglist", lambda u, c: list_files(u, c, "images")))
+application.add_handler(CommandHandler("vidlist", lambda u, c: list_files(u, c, "videos")))
+application.add_handler(CommandHandler("audlist", lambda u, c: list_files(u, c, "audios")))
+application.add_handler(CommandHandler("fileslist", lambda u, c: list_files(u, c, "files")))
+application.add_handler(CommandHandler("textlist", lambda u, c: list_files(u, c, "text")))
+application.add_handler(CommandHandler("get", get_file))
+application.add_handler(CallbackQueryHandler(handle_cb))
 
-    app.add_handler(CommandHandler("imglist", lambda u, c: list_files(u, c, "images")))
-    app.add_handler(CommandHandler("vidlist", lambda u, c: list_files(u, c, "videos")))
-    app.add_handler(CommandHandler("fileslist", lambda u, c: list_files(u, c, "files")))
-    app.add_handler(CommandHandler("audlist", lambda u, c: list_files(u, c, "audios")))   # ✅ NEW
-    app.add_handler(CommandHandler("textlist", lambda u, c: list_files(u, c, "text")))    # ✅ NEW
+app = FastAPI()
 
-    app.add_handler(CommandHandler("get", get_file))
-    app.add_handler(CallbackQueryHandler(handle_cb))
+@app.on_event("startup")
+async def startup():
+    await application.initialize()
+    await application.bot.set_webhook(url=WEBHOOK_URL)
 
-    app.run_polling()
+@app.post("/webhook")
+async def webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return {"ok": True}
