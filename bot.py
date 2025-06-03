@@ -14,7 +14,7 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., https://your-service.onrender.com/webhook
 
-ADMIN_IDS = [123456789]  # Replace with your Telegram user ID
+ADMIN_IDS = [5558589142]  # Replace with your Telegram user ID
 DB_PATH = "data/db.json"
 CATEGORY_PATHS = {
     "images": "data/images",
