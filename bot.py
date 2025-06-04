@@ -7,14 +7,15 @@ import httpx
 from fastapi import FastAPI, Request
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, Application,
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters as tg_filters
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+RENDER_EXTERNAL_URL = os.getenv("WEBHOOK_URL")
 
-if not BOT_TOKEN or not WEBHOOK_URL:
-    raise ValueError("Missing BOT_TOKEN or WEBHOOK_URL env variable")
+if not BOT_TOKEN or not RENDER_EXTERNAL_URL:
+    raise ValueError("Missing BOT_TOKEN or WEBHOOK_URL environment variable")
 
 app = FastAPI()
 upload_mode_users = set()
@@ -135,8 +136,20 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Upload failed.")
 
-# ---------- Telegram App Initialization ----------
-application: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+# ---------- Fallback ----------
+async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Unsupported file or command.")
+
+# ---------- FastAPI Webhook ----------
+@app.post("/webhook")
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, context.bot)
+    await application.process_update(update)
+    return {"ok": True}
+
+# ---------- Main ----------
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
@@ -145,21 +158,20 @@ application.add_handler(CommandHandler("done", done))
 for cmd in FILE_DB.keys():
     application.add_handler(CommandHandler(cmd, list_files))
 
-application.add_handler(MessageHandler(filters.ALL, handle_file))
+# Handle allowed types only
+application.add_handler(MessageHandler(
+    tg_filters.PHOTO | tg_filters.VIDEO | tg_filters.DOCUMENT |
+    tg_filters.AUDIO | tg_filters.VOICE | tg_filters.TEXT,
+    handle_file
+))
 
-# ---------- FastAPI Webhook ----------
-@app.post("/webhook")
-async def telegram_webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    return {"ok": True}
+# Fallback
+application.add_handler(MessageHandler(tg_filters.ALL, unknown))
 
-@app.on_event("startup")
-async def startup_event():
+async def setup():
     await application.initialize()
     await application.start()
-    await application.bot.set_webhook(url=WEBHOOK_URL)
+    await application.bot.set_webhook(url=RENDER_EXTERNAL_URL + "/webhook")
     await application.bot.set_my_commands([
         BotCommand("start", "Start bot"),
         BotCommand("add", "Enable upload mode"),
@@ -168,6 +180,9 @@ async def startup_event():
         BotCommand("documents", "List uploaded documents"),
         BotCommand("videos", "List uploaded videos"),
         BotCommand("audios", "List uploaded audios"),
-        BotCommand("texts", "List uploaded texts"),
+        BotCommand("texts", "List uploaded texts")
     ])
     logger.info("✅ Webhook and commands registered.")
+
+import asyncio
+asyncio.run(setup())
