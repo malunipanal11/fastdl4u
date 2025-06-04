@@ -1,242 +1,121 @@
-# (Existing imports remain unchanged)
 import os
-import json
-import asyncio
-from datetime import datetime
-from contextlib import asynccontextmanager
+import logging
+import aiohttp
+from uuid import uuid4
+from telegram import Update, BotCommand
+from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters)
 
-from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
-)
+TOKEN = "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw"
+GOFILE_API = "GOFILE_TOKEN=7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq"
 
-# === CONFIG ===
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-ADMIN_IDS = [5558589142]
-DB_PATH = "data/db.json"
-CATEGORY_PATHS = {
-    "images": "data/images",
-    "videos": "data/videos",
-    "audios": "data/audios",
-    "files": "data/files",
-    "text": "data/text"
-}
+logging.basicConfig(level=logging.INFO)
 
-# === UTILS ===
-def load_db():
-    if not os.path.exists(DB_PATH):
-        return {}
-    with open(DB_PATH, "r") as f:
-        return json.load(f)
+FILE_DB = {}  # Simulated DB: {'type': [list of files]}
 
-def save_db(db):
-    with open(DB_PATH, "w") as f:
-        json.dump(db, f, indent=2)
+async def upload_to_gofile(file_path):
+    async with aiohttp.ClientSession() as session:
+        with open(file_path, 'rb') as f:
+            data = aiohttp.FormData()
+            data.add_field('file', f, filename=os.path.basename(file_path))
+            async with session.post(GOFILE_API, data=data) as resp:
+                res_json = await resp.json()
+                return res_json['data']['downloadPage'] if res_json['status'] == 'ok' else None
 
-def get_next_serial():
-    db = load_db()
-    serial = str(len(db) + 1).zfill(4)
-    return serial
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("\u2705 Bot is alive and working!")
 
-def save_file(file_bytes, filename, category, extension):
-    serial = get_next_serial()
-    path = CATEGORY_PATHS[category]
-    os.makedirs(path, exist_ok=True)
-    full_filename = f"{serial}_{filename}.{extension}"
-    full_path = os.path.join(path, full_filename)
-    with open(full_path, "wb") as f:
-        f.write(file_bytes)
-    db = load_db()
-    db[serial] = {
-        "file": full_filename,
-        "category": category,
-        "time": datetime.utcnow().isoformat()
-    }
-    save_db(db)
-    return serial, full_path
-
-def admin_only(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id not in ADMIN_IDS:
-            await update.message.reply_text("Admin only.")
-            return
-        return await func(update, context)
-    return wrapper
-
-# === HANDLERS ===
-
-@admin_only
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Upload a file after using /add.")
 
-@admin_only
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    doc = update.message.document
-    ext = doc.file_name.split(".")[-1].lower()
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file_type = None
+    tg_file = None
+    name = None
 
-    category = (
-        "images" if ext in ["jpg", "png", "jpeg", "gif"] else
-        "videos" if ext in ["mp4", "mov", "mkv"] else
-        "audios" if ext in ["mp3", "ogg", "wav"] else
-        "files" if ext in ["pdf", "zip", "rar"] else
-        "text" if ext in ["txt", "md"] else None
-    )
-
-    if not category:
-        await update.message.reply_text("❌ Unsupported file type.")
+    if update.message.document:
+        tg_file = update.message.document
+        file_type = 'documents'
+    elif update.message.photo:
+        tg_file = update.message.photo[-1]
+        file_type = 'images'
+    elif update.message.video:
+        tg_file = update.message.video
+        file_type = 'videos'
+    elif update.message.audio:
+        tg_file = update.message.audio
+        file_type = 'audios'
+    elif update.message.voice:
+        tg_file = update.message.voice
+        file_type = 'audios'
+    elif update.message.text:
+        content = update.message.text
+        file_type = 'texts'
+        name = f"text_{uuid4().hex[:8]}.txt"
+        with open(name, 'w') as f:
+            f.write(content)
+        gofile_link = await upload_to_gofile(name)
+        os.remove(name)
+        if gofile_link:
+            FILE_DB.setdefault(file_type, []).append((name, gofile_link))
+            await update.message.reply_text(f"\u2705 Text saved: {gofile_link}")
+        else:
+            await update.message.reply_text("\u274C Failed to upload text.")
         return
 
-    file = await doc.get_file()
-    file_bytes = await file.download_as_bytearray()
-    serial, path = save_file(file_bytes, doc.file_name.rsplit('.', 1)[0], category, ext)
-
-    await update.message.reply_text(f"✅ File saved in /{category} as #{serial}")
-
-# ... (The rest of your existing handlers are unchanged)
-
-async def send_from_category(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str):
-    files = os.listdir(CATEGORY_PATHS[category])
-    if not files:
-        await update.message.reply_text(f"No files in {category}.")
+    if not tg_file:
+        await update.message.reply_text("\u274C Unsupported file type.")
         return
 
-    latest = sorted(files)[-1]
-    path = os.path.join(CATEGORY_PATHS[category], latest)
+    file = await context.bot.get_file(tg_file.file_id)
+    name = tg_file.file_name if hasattr(tg_file, 'file_name') else f"{file_type}_{uuid4().hex[:8]}"
+    local_path = f"temp_{name}"
+    await file.download_to_drive(local_path)
 
-    if category == "text":
-        with open(path, "r") as f:
-            sent = await update.message.reply_text(f.read())
+    gofile_link = await upload_to_gofile(local_path)
+    os.remove(local_path)
+
+    if gofile_link:
+        FILE_DB.setdefault(file_type, []).append((name, gofile_link))
+        await update.message.reply_text(f"\u2705 File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}")
     else:
-        sent = await update.message.reply_document(open(path, "rb"))
+        await update.message.reply_text("\u274C Upload failed.")
 
-    await asyncio.sleep(30)
-    await update.message.delete()
-    await asyncio.sleep(600)
-    await sent.delete()
-
-async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str, page: int = 0):
-    files = sorted(os.listdir(CATEGORY_PATHS[category]))
+async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file_type = update.message.text[1:]  # /images -> 'images'
+    files = FILE_DB.get(file_type, [])
     if not files:
-        await update.message.reply_text("No files.")
-        return
-
-    start = page * 25
-    end = start + 25
-    keyboard = []
-
-    for f in files[start:end]:
-        serial = f.split("_")[0]
-        btns = [
-            InlineKeyboardButton("\U0001F4E5 Download", callback_data=f"download:{category}:{serial}"),
-            InlineKeyboardButton("\u25B6\uFE0F Play", callback_data=f"play:{category}:{serial}"),
-            InlineKeyboardButton("\U0001F4E4 Send", callback_data=f"send:{category}:{serial}")
-        ]
-        if update.effective_user.id in ADMIN_IDS:
-            btns.append(InlineKeyboardButton("\u274C Delete", callback_data=f"delete:{category}:{serial}"))
-        keyboard.append(btns)
-
-    nav_btns = []
-    if start > 0:
-        nav_btns.append(InlineKeyboardButton("\u25C0\uFE0F Prev", callback_data=f"page:{category}:{page - 1}"))
-    if end < len(files):
-        nav_btns.append(InlineKeyboardButton("\u25B6\uFE0F Next", callback_data=f"page:{category}:{page + 1}"))
-    if nav_btns:
-        keyboard.append(nav_btns)
-
-    await update.message.reply_text(
-        f"List of {category} files (Page {page + 1})",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    action, category, serial = data.split(":") if not data.startswith("page") else data.split(":", 2)
-
-    if action == "page":
-        await list_files(query.message, context, category, int(serial))
-        return
-
-    path = None
-    for fname in os.listdir(CATEGORY_PATHS[category]):
-        if fname.startswith(serial):
-            path = os.path.join(CATEGORY_PATHS[category], fname)
-            break
-
-    if not path or not os.path.exists(path):
-        await query.message.reply_text("File not found.")
-        return
-
-    if action in ["download", "play", "send"]:
-        await query.message.reply_document(InputFile(path))
-    elif action == "delete" and query.from_user.id in ADMIN_IDS:
-        os.remove(path)
-        db = load_db()
-        db.pop(serial, None)
-        save_db(db)
-        await query.message.reply_text(f"Deleted file #{serial} from {category}.")
-
-async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /get <serial>")
-        return
-
-    serial = context.args[0]
-    db = load_db()
-    if serial not in db:
-        await update.message.reply_text("Serial not found.")
-        return
-
-    meta = db[serial]
-    if meta["category"] not in ["files", "text"]:
-        await update.message.reply_text("/get only allowed for files or text category.")
-        return
-
-    path = os.path.join(CATEGORY_PATHS[meta["category"]], meta["file"])
-    if meta["category"] == "text":
-        with open(path, "r") as f:
-            await update.message.reply_text(f.read())
+        await update.message.reply_text(f"\u274C No {file_type} stored yet.")
     else:
-        await update.message.reply_document(open(path, "rb"))
+        message = f"\ud83d\udcc2 {file_type.upper()} FILES:\n\n"
+        for i, (name, link) in enumerate(files, 1):
+            message += f"#{i:04d} - {name}\n"
+        await update.message.reply_text(message, disable_web_page_preview=True, parse_mode="Markdown")
 
-# === FASTAPI + TELEGRAM APP ===
+async def set_bot_commands(application):
+    commands = [
+        BotCommand("start", "Start the bot"),
+        BotCommand("add", "Add/upload a file"),
+        BotCommand("files", "List all uploaded files"),
+        BotCommand("images", "List uploaded images"),
+        BotCommand("audios", "List uploaded audio files"),
+        BotCommand("videos", "List uploaded videos"),
+        BotCommand("texts", "List saved text messages"),
+    ]
+    await application.bot.set_my_commands(commands)
 
-application = Application.builder().token(TOKEN).build()
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
 
-application.add_handler(CommandHandler("add", add))
-application.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
-application.add_handler(CommandHandler("videos", lambda u, c: send_from_category(u, c, "videos")))
-application.add_handler(CommandHandler("audios", lambda u, c: send_from_category(u, c, "audios")))
-application.add_handler(CommandHandler("files", lambda u, c: send_from_category(u, c, "files")))
-application.add_handler(CommandHandler("text", lambda u, c: send_from_category(u, c, "text")))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("files", list_files))
+    app.add_handler(CommandHandler("images", list_files))
+    app.add_handler(CommandHandler("videos", list_files))
+    app.add_handler(CommandHandler("audios", list_files))
+    app.add_handler(CommandHandler("texts", list_files))
+    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
 
-application.add_handler(CommandHandler("imglist", lambda u, c: list_files(u, c, "images")))
-application.add_handler(CommandHandler("vidlist", lambda u, c: list_files(u, c, "videos")))
-application.add_handler(CommandHandler("audlist", lambda u, c: list_files(u, c, "audios")))
-application.add_handler(CommandHandler("fileslist", lambda u, c: list_files(u, c, "files")))
-application.add_handler(CommandHandler("textlist", lambda u, c: list_files(u, c, "text")))
+    app.post_init = lambda _: set_bot_commands(app)
 
-application.add_handler(CommandHandler("get", get_file))
-application.add_handler(CallbackQueryHandler(handle_cb))
-
-# 🔧 NEW: Handle document uploads
-application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await application.initialize()
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    yield  # on shutdown
-
-app = FastAPI(lifespan=lifespan)
-
-@app.post("/webhook")
-async def webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    return {"ok": True}
+    print("\n==> Bot is running. Upload files after /add\n")
+    app.run_polling()
