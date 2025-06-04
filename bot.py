@@ -5,23 +5,25 @@ from telegram import Update, BotCommand
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ContextTypes, filters as tg_filters
 )
-from telegram.constants import ChatAction
 from typing import Dict, List
 
+# === Configuration ===
 TOKEN = os.getenv("BOT_TOKEN", "your_bot_token_here")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-webhook-url/render")
 
+# === Logging ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# === FastAPI and Bot Setup ===
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
+# === In-memory Data ===
 user_states: Dict[int, bool] = {}
 user_uploads: Dict[int, List[str]] = {}
 
-# ----------------- Command Handlers -----------------
-
+# === Command Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
 
@@ -29,9 +31,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_states[user_id] = True
     user_uploads.setdefault(user_id, [])
-    await update.message.reply_text(
-        "✅ Upload mode ON. Send files or text.\nWhen done, send /done."
-    )
+    await update.message.reply_text("✅ Upload mode ON. Send files or text.\nWhen done, send /done.")
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -46,11 +46,10 @@ async def list_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ No images uploaded yet.")
     else:
         await update.message.reply_text(
-            f"📸 Uploaded images:\n" + "\n".join(img.replace("image:", "") for img in images)
+            "📸 Uploaded images:\n" + "\n".join(img.replace("image:", "") for img in images)
         )
 
-# ----------------- File/Text Handler -----------------
-
+# === File/Text Handler ===
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not user_states.get(user_id, False):
@@ -68,35 +67,33 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.video:
         file_id = update.message.video.file_id
         file_type = "video"
-    elif update.message.text:
-        file_id = update.message.text
-        file_type = "text"
     elif update.message.audio:
         file_id = update.message.audio.file_id
         file_type = "audio"
     elif update.message.voice:
         file_id = update.message.voice.file_id
         file_type = "voice"
+    elif update.message.text:
+        file_id = update.message.text
+        file_type = "text"
 
     if file_id and file_type:
         user_uploads[user_id].append(f"{file_type}:{file_id}")
         await update.message.reply_text(f"✅ Received {file_type}")
 
-# ----------------- Setup -----------------
-
+# === Add Handlers ===
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
 application.add_handler(CommandHandler("done", done))
 application.add_handler(CommandHandler("images", list_images))
 
 application.add_handler(MessageHandler(
-    tg_filters.PHOTO | tg_filters.VIDEO | tg_filters.DOCUMENT |
-    tg_filters.AUDIO | tg_filters.VOICE | tg_filters.TEXT,
+    tg_filters.photo | tg_filters.video | tg_filters.document |
+    tg_filters.audio | tg_filters.voice | tg_filters.text,
     handle_file
 ))
 
-# ----------------- FastAPI -----------------
-
+# === Webhook Integration ===
 @app.on_event("startup")
 async def startup_event():
     await application.initialize()
