@@ -12,21 +12,20 @@ from telegram.ext import (
     filters
 )
 
-# Load environment variables
+# Read environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-app.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 GOFILE_API = f"https://api.gofile.io/uploadFile?token={GOFILE_TOKEN}"
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 FILE_DB = {}
 
 # FastAPI app
 app = FastAPI()
 
-# Telegram bot application
+# Telegram bot app
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
 async def upload_to_gofile(file_path):
@@ -38,7 +37,6 @@ async def upload_to_gofile(file_path):
                 res_json = await resp.json()
                 return res_json['data']['downloadPage'] if res_json['status'] == 'ok' else None
 
-# Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and working!")
 
@@ -85,7 +83,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     file = await context.bot.get_file(tg_file.file_id)
-    name = getattr(tg_file, 'file_name', f"{file_type}_{uuid4().hex[:8]}")
+    name = tg_file.file_name if hasattr(tg_file, 'file_name') else f"{file_type}_{uuid4().hex[:8]}"
     local_path = f"temp_{name}"
     await file.download_to_drive(local_path)
 
@@ -109,7 +107,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"#{i:04d} - {name}: {link}\n"
         await update.message.reply_text(message, disable_web_page_preview=True)
 
-async def set_bot_commands():
+async def set_bot_commands(application):
     commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("add", "Add/upload a file"),
@@ -119,9 +117,9 @@ async def set_bot_commands():
         BotCommand("videos", "List uploaded videos"),
         BotCommand("texts", "List saved text messages"),
     ]
-    await telegram_app.bot.set_my_commands(commands)
+    await application.bot.set_my_commands(commands)
 
-# Add handlers
+# Telegram handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("add", add))
 telegram_app.add_handler(CommandHandler("files", list_files))
@@ -129,17 +127,22 @@ telegram_app.add_handler(CommandHandler("images", list_files))
 telegram_app.add_handler(CommandHandler("videos", list_files))
 telegram_app.add_handler(CommandHandler("audios", list_files))
 telegram_app.add_handler(CommandHandler("texts", list_files))
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file))
+telegram_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
 
 @app.on_event("startup")
-async def startup():
+async def on_startup():
     await telegram_app.initialize()
+    await telegram_app.start()  # 🔧 This was missing
     await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-    await set_bot_commands()
+    await set_bot_commands(telegram_app)
 
 @app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
+async def telegram_webhook(req: Request):
+    data = await req.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"ok": True}
+
+@app.get("/")
+async def health():
+    return {"status": "ok"}
