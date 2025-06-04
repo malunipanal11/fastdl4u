@@ -11,4 +11,4 @@ services:
       - key: GOFILE_TOKEN
         value: 7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq
       - key: WEBHOOK_URL
-        value: https://fastdl4u.onrender.com
+        value: https://fastdl4u.onrender.com/webhook
