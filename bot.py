@@ -2,39 +2,42 @@ import os
 import logging
 import aiohttp
 from uuid import uuid4
-
+from fastapi import FastAPI, Request
 from telegram import Update, BotCommand
 from telegram.ext import (
-    Application, ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    Application, 
+    CommandHandler, 
+    MessageHandler, 
+    ContextTypes, 
+    filters
 )
-from fastapi import FastAPI
 from telegram.ext.webhook import WebhookRequestHandler
 
-# Your credentials (used directly)
-BOT_TOKEN = "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw"
-GOFILE_TOKEN = "7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq"
-WEBHOOK_DOMAIN = "https://fastdl4u.onrender.com"
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+# Read environment variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# Logging
+GOFILE_API = f"https://api.gofile.io/uploadFile?token={GOFILE_TOKEN}"
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 FILE_DB = {}
 
-# Upload to Gofile
+# FastAPI app
+app = FastAPI()
+
+# Telegram app instance
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+
 async def upload_to_gofile(file_path):
     async with aiohttp.ClientSession() as session:
         with open(file_path, 'rb') as f:
             data = aiohttp.FormData()
             data.add_field('file', f, filename=os.path.basename(file_path))
-            data.add_field('token', GOFILE_TOKEN)
-            async with session.post("https://api.gofile.io/uploadFile", data=data) as resp:
+            async with session.post(GOFILE_API, data=data) as resp:
                 res_json = await resp.json()
                 return res_json['data']['downloadPage'] if res_json['status'] == 'ok' else None
 
-# Bot Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and working!")
 
@@ -42,7 +45,9 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Upload a file after using /add.")
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_type, tg_file, name = None, None, None
+    file_type = None
+    tg_file = None
+    name = None
 
     if update.message.document:
         tg_file = update.message.document
@@ -53,8 +58,11 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.video:
         tg_file = update.message.video
         file_type = 'videos'
-    elif update.message.audio or update.message.voice:
-        tg_file = update.message.audio or update.message.voice
+    elif update.message.audio:
+        tg_file = update.message.audio
+        file_type = 'audios'
+    elif update.message.voice:
+        tg_file = update.message.voice
         file_type = 'audios'
     elif update.message.text:
         content = update.message.text
@@ -76,7 +84,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     file = await context.bot.get_file(tg_file.file_id)
-    name = getattr(tg_file, 'file_name', f"{file_type}_{uuid4().hex[:8]}")
+    name = tg_file.file_name if hasattr(tg_file, 'file_name') else f"{file_type}_{uuid4().hex[:8]}"
     local_path = f"temp_{name}"
     await file.download_to_drive(local_path)
 
@@ -97,10 +105,10 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         message = f"📂 {file_type.upper()} FILES:\n\n"
         for i, (name, link) in enumerate(files, 1):
-            message += f"#{i:04d} - {name}\n"
+            message += f"#{i:04d} - {name}: {link}\n"
         await update.message.reply_text(message, disable_web_page_preview=True)
 
-async def set_bot_commands(application: Application):
+async def set_bot_commands(application):
     commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("add", "Add/upload a file"),
@@ -112,27 +120,25 @@ async def set_bot_commands(application: Application):
     ]
     await application.bot.set_my_commands(commands)
 
-# Build Application
-application = ApplicationBuilder().token(BOT_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("add", add))
-application.add_handler(CommandHandler("files", list_files))
-application.add_handler(CommandHandler("images", list_files))
-application.add_handler(CommandHandler("videos", list_files))
-application.add_handler(CommandHandler("audios", list_files))
-application.add_handler(CommandHandler("texts", list_files))
-application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
-application.post_init = lambda _: set_bot_commands(application)
+# Telegram handlers
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("add", add))
+telegram_app.add_handler(CommandHandler("files", list_files))
+telegram_app.add_handler(CommandHandler("images", list_files))
+telegram_app.add_handler(CommandHandler("videos", list_files))
+telegram_app.add_handler(CommandHandler("audios", list_files))
+telegram_app.add_handler(CommandHandler("texts", list_files))
+telegram_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
 
-# FastAPI
-fastapi_app = FastAPI()
-
-class Handler(WebhookRequestHandler):
-    def __init__(self): super().__init__(application=application, webhook_path=WEBHOOK_PATH)
-
-fastapi_app.add_route(WEBHOOK_PATH, Handler(), methods=["POST"])
-
-@fastapi_app.on_event("startup")
+@app.on_event("startup")
 async def on_startup():
-    await application.bot.set_webhook(f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}")
-    logging.info(f"Webhook set to {WEBHOOK_DOMAIN}{WEBHOOK_PATH}")
+    await telegram_app.initialize()
+    await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}")
+    await set_bot_commands(telegram_app)
+
+@app.post("/webhook")
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
