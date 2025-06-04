@@ -1,3 +1,4 @@
+# (Existing imports remain unchanged)
 import os
 import json
 import asyncio
@@ -12,10 +13,9 @@ from telegram.ext import (
 )
 
 # === CONFIG ===
-
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., https://your-service.onrender.com/webhook
-ADMIN_IDS = [5558589142]  # Replace with your Telegram user ID
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+ADMIN_IDS = [5558589142]
 DB_PATH = "data/db.json"
 CATEGORY_PATHS = {
     "images": "data/images",
@@ -26,7 +26,6 @@ CATEGORY_PATHS = {
 }
 
 # === UTILS ===
-
 def load_db():
     if not os.path.exists(DB_PATH):
         return {}
@@ -67,17 +66,14 @@ def admin_only(func):
         return await func(update, context)
     return wrapper
 
-# === COMMAND HANDLERS ===
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is alive and working!")
+# === HANDLERS ===
 
 @admin_only
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.document:
-        await update.message.reply_text("Upload a file after using /add.")
-        return
+    await update.message.reply_text("Upload a file after using /add.")
 
+@admin_only
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     ext = doc.file_name.split(".")[-1].lower()
 
@@ -90,14 +86,16 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if not category:
-        await update.message.reply_text("Unsupported file type.")
+        await update.message.reply_text("❌ Unsupported file type.")
         return
 
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
     serial, path = save_file(file_bytes, doc.file_name.rsplit('.', 1)[0], category, ext)
 
-    await update.message.reply_text(f"Saved in /{category} with serial #{serial}")
+    await update.message.reply_text(f"✅ File saved in /{category} as #{serial}")
+
+# ... (The rest of your existing handlers are unchanged)
 
 async def send_from_category(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str):
     files = os.listdir(CATEGORY_PATHS[category])
@@ -209,8 +207,6 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 application = Application.builder().token(TOKEN).build()
 
-# === Handlers ===
-application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
 application.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
 application.add_handler(CommandHandler("videos", lambda u, c: send_from_category(u, c, "videos")))
@@ -227,20 +223,20 @@ application.add_handler(CommandHandler("textlist", lambda u, c: list_files(u, c,
 application.add_handler(CommandHandler("get", get_file))
 application.add_handler(CallbackQueryHandler(handle_cb))
 
-# === FastAPI Lifespan ===
+# 🔧 NEW: Handle document uploads
+application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await application.initialize()
     await application.bot.set_webhook(url=WEBHOOK_URL)
-    yield
+    yield  # on shutdown
 
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
-    print("Webhook received:", json.dumps(data, indent=2))  # Optional debug
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return {"ok": True}
