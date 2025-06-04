@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from fastapi import FastAPI, Request
 from telegram import Update, BotCommand
@@ -8,23 +9,23 @@ from telegram.ext import (
 from telegram.constants import ChatAction
 from typing import Dict, List
 
-# Environment variables
+# --- Environment setup ---
 TOKEN = os.getenv("BOT_TOKEN", "your_bot_token_here")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-webhook-url/render")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-webhook-url.onrender.com")
 
-# Logging
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bot")
 
-# FastAPI and Telegram application setup
+# --- FastAPI + Telegram App ---
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
-# User session states
+# --- Session Management ---
 user_states: Dict[int, bool] = {}
 user_uploads: Dict[int, List[str]] = {}
 
-# ----------------- Command Handlers -----------------
+# ----------------- Handlers -----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
@@ -33,9 +34,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_states[user_id] = True
     user_uploads.setdefault(user_id, [])
-    await update.message.reply_text(
-        "✅ Upload mode ON. Send files or text.\nWhen done, send /done."
-    )
+    await update.message.reply_text("✅ Upload mode ON. Send files or text.\nWhen done, send /done.")
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -49,16 +48,12 @@ async def list_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not images:
         await update.message.reply_text("❌ No images uploaded yet.")
     else:
-        await update.message.reply_text(
-            "📸 Uploaded images:\n" + "\n".join(img.replace("image:", "") for img in images)
-        )
-
-# ----------------- File/Text Handler -----------------
+        await update.message.reply_text("📸 Uploaded images:\n" + "\n".join(img.replace("image:", "") for img in images))
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not user_states.get(user_id, False):
-        return  # Ignore unless in upload mode
+        return
 
     file_id = None
     file_type = None
@@ -72,21 +67,21 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.video:
         file_id = update.message.video.file_id
         file_type = "video"
-    elif update.message.text:
-        file_id = update.message.text
-        file_type = "text"
     elif update.message.audio:
         file_id = update.message.audio.file_id
         file_type = "audio"
     elif update.message.voice:
         file_id = update.message.voice.file_id
         file_type = "voice"
+    elif update.message.text:
+        file_id = update.message.text
+        file_type = "text"
 
     if file_id and file_type:
         user_uploads[user_id].append(f"{file_type}:{file_id}")
         await update.message.reply_text(f"✅ Received {file_type}")
 
-# ----------------- Setup -----------------
+# ----------------- Register Handlers -----------------
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
@@ -99,7 +94,7 @@ application.add_handler(MessageHandler(
     handle_file
 ))
 
-# ----------------- FastAPI -----------------
+# ----------------- FastAPI Integration -----------------
 
 @app.on_event("startup")
 async def startup_event():
@@ -116,8 +111,9 @@ async def startup_event():
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, application.bot)
+    body = await req.body()
+    update_dict = json.loads(body)
+    update = Update.de_json(update_dict, bot=application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
