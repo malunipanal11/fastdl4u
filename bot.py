@@ -2,37 +2,44 @@ import os
 import logging
 import aiohttp
 from uuid import uuid4
+
 from telegram import Update, BotCommand
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+    Application, ApplicationBuilder, CommandHandler,
+    MessageHandler, ContextTypes, filters
 )
+from fastapi import FastAPI, Request
+from telegram.ext.webhook import WebhookRequestHandler
 
-# Load environment variables
-TOKEN = os.environ.get("BOT_TOKEN")
-GOFILE_TOKEN = os.environ.get("GOFILE_TOKEN")
-GOFILE_UPLOAD_API = "https://api.gofile.io/uploadFile"
+# Load from environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # e.g., https://your-app.onrender.com
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 
+# Logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 FILE_DB = {}
 
+# File upload logic
 async def upload_to_gofile(file_path):
     async with aiohttp.ClientSession() as session:
         with open(file_path, 'rb') as f:
             data = aiohttp.FormData()
             data.add_field('file', f, filename=os.path.basename(file_path))
-            data.add_field('token', GOFILE_TOKEN)  # Use your Gofile account token
-            async with session.post(GOFILE_UPLOAD_API, data=data) as resp:
+            data.add_field('token', GOFILE_TOKEN)
+            async with session.post("https://api.gofile.io/uploadFile", data=data) as resp:
                 res_json = await resp.json()
-                if res_json['status'] == 'ok':
-                    return res_json['data']['downloadPage']
-                else:
-                    return None
+                return res_json['data']['downloadPage'] if res_json['status'] == 'ok' else None
 
+# Bot commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and working!")
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please send the file now.")
+    await update.message.reply_text("Upload a file after using /add.")
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_type, tg_file, name = None, None, None
@@ -46,22 +53,20 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.video:
         tg_file = update.message.video
         file_type = 'videos'
-    elif update.message.audio:
-        tg_file = update.message.audio
-        file_type = 'audios'
-    elif update.message.voice:
-        tg_file = update.message.voice
+    elif update.message.audio or update.message.voice:
+        tg_file = update.message.audio or update.message.voice
         file_type = 'audios'
     elif update.message.text:
+        content = update.message.text
         file_type = 'texts'
         name = f"text_{uuid4().hex[:8]}.txt"
         with open(name, 'w') as f:
-            f.write(update.message.text)
+            f.write(content)
         gofile_link = await upload_to_gofile(name)
         os.remove(name)
         if gofile_link:
             FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-            await update.message.reply_text(f"✅ Text uploaded: {gofile_link}")
+            await update.message.reply_text(f"✅ Text saved: {gofile_link}")
         else:
             await update.message.reply_text("❌ Failed to upload text.")
         return
@@ -71,7 +76,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     file = await context.bot.get_file(tg_file.file_id)
-    name = tg_file.file_name if hasattr(tg_file, 'file_name') else f"{file_type}_{uuid4().hex[:8]}"
+    name = getattr(tg_file, 'file_name', f"{file_type}_{uuid4().hex[:8]}")
     local_path = f"temp_{name}"
     await file.download_to_drive(local_path)
 
@@ -80,22 +85,23 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if gofile_link:
         FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-        await update.message.reply_text(f"✅ File saved under /{file_type} as #{len(FILE_DB[file_type]):04d}")
+        await update.message.reply_text(f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}")
     else:
         await update.message.reply_text("❌ Upload failed.")
 
 async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_type = update.message.text[1:]  # /images -> 'images'
+    file_type = update.message.text[1:]  # /images → images
     files = FILE_DB.get(file_type, [])
     if not files:
         await update.message.reply_text(f"❌ No {file_type} stored yet.")
     else:
         message = f"📂 {file_type.upper()} FILES:\n\n"
         for i, (name, link) in enumerate(files, 1):
-            message += f"#{i:04d} - {name}\n{link}\n\n"
+            message += f"#{i:04d} - {name}\n"
         await update.message.reply_text(message, disable_web_page_preview=True)
 
-async def set_bot_commands(application):
+# Setup commands
+async def set_bot_commands(application: Application):
     commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("add", "Add/upload a file"),
@@ -107,19 +113,30 @@ async def set_bot_commands(application):
     ]
     await application.bot.set_my_commands(commands)
 
-if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
+# Build Telegram app
+application = ApplicationBuilder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("add", add))
+application.add_handler(CommandHandler("files", list_files))
+application.add_handler(CommandHandler("images", list_files))
+application.add_handler(CommandHandler("videos", list_files))
+application.add_handler(CommandHandler("audios", list_files))
+application.add_handler(CommandHandler("texts", list_files))
+application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("files", list_files))
-    app.add_handler(CommandHandler("images", list_files))
-    app.add_handler(CommandHandler("videos", list_files))
-    app.add_handler(CommandHandler("audios", list_files))
-    app.add_handler(CommandHandler("texts", list_files))
-    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
+application.post_init = lambda _: set_bot_commands(application)
 
-    app.post_init = lambda _: set_bot_commands(app)
+# FastAPI app
+fastapi_app = FastAPI()
 
-    print("==> Bot is running. Upload files after /add")
-    app.run_polling()
+class Handler(WebhookRequestHandler):
+    def __init__(self): super().__init__(application=application, webhook_path=WEBHOOK_PATH)
+
+handler = Handler()
+fastapi_app.add_route(WEBHOOK_PATH, handler, methods=["POST"])
+
+# Set webhook on startup
+@fastapi_app.on_event("startup")
+async def on_startup():
+    await application.bot.set_webhook(f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}")
+    logging.info(f"Webhook set to {WEBHOOK_DOMAIN}{WEBHOOK_PATH}")
