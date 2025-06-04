@@ -12,27 +12,20 @@ from telegram.ext import (
     filters
 )
 
-# === Environment variables ===
+# ENV variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-if not BOT_TOKEN or not GOFILE_TOKEN or not WEBHOOK_URL:
-    raise ValueError("Missing environment variables.")
-
 GOFILE_API = f"https://api.gofile.io/uploadFile?token={GOFILE_TOKEN}"
+logging.basicConfig(level=logging.INFO)
 FILE_DB = {}
 
-# === Logging ===
-logging.basicConfig(level=logging.INFO)
-
-# === FastAPI app ===
+# FastAPI + Telegram
 app = FastAPI()
-
-# === Telegram app ===
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# === Upload file to GoFile.io ===
+# GoFile uploader
 async def upload_to_gofile(file_path):
     async with aiohttp.ClientSession() as session:
         with open(file_path, 'rb') as f:
@@ -40,15 +33,19 @@ async def upload_to_gofile(file_path):
             data.add_field('file', f, filename=os.path.basename(file_path))
             async with session.post(GOFILE_API, data=data) as resp:
                 res_json = await resp.json()
-                return res_json['data']['downloadPage'] if res_json['status'] == 'ok' else None
+                if res_json['status'] == 'ok':
+                    return res_json['data']['downloadPage']
+                return None
 
-# === Handlers ===
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and working!")
 
+# /add
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Upload a file after using /add.")
 
+# File handler
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_type = None
     tg_file = None
@@ -89,7 +86,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     file = await context.bot.get_file(tg_file.file_id)
-    name = tg_file.file_name if hasattr(tg_file, 'file_name') else f"{file_type}_{uuid4().hex[:8]}"
+    name = getattr(tg_file, 'file_name', f"{file_type}_{uuid4().hex[:8]}")
     local_path = f"temp_{name}"
     await file.download_to_drive(local_path)
 
@@ -98,10 +95,11 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if gofile_link:
         FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-        await update.message.reply_text(f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}")
+        await update.message.reply_text(f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}\n{gofile_link}")
     else:
         await update.message.reply_text("❌ Upload failed.")
 
+# List files
 async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_type = update.message.text[1:]
     files = FILE_DB.get(file_type, [])
@@ -113,6 +111,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"#{i:04d} - {name}: {link}\n"
         await update.message.reply_text(message, disable_web_page_preview=True)
 
+# Bot commands
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "Start the bot"),
@@ -125,7 +124,7 @@ async def set_bot_commands(application):
     ]
     await application.bot.set_my_commands(commands)
 
-# === Register handlers ===
+# Register handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("add", add))
 telegram_app.add_handler(CommandHandler("files", list_files))
@@ -135,15 +134,13 @@ telegram_app.add_handler(CommandHandler("audios", list_files))
 telegram_app.add_handler(CommandHandler("texts", list_files))
 telegram_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
 
-# === FastAPI startup ===
 @app.on_event("startup")
 async def on_startup():
     await telegram_app.initialize()
     await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
     await set_bot_commands(telegram_app)
-    await telegram_app.start()
+    logging.info("Webhook set and bot commands registered.")
 
-# === Webhook endpoint ===
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
