@@ -7,18 +7,18 @@ import httpx
 from fastapi import FastAPI, Request
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, Application,
 )
 
-# ---------- Config ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 if not BOT_TOKEN or not WEBHOOK_URL:
-    raise ValueError("BOT_TOKEN and WEBHOOK_URL must be set.")
+    raise ValueError("Missing BOT_TOKEN or WEBHOOK_URL env variable")
 
 app = FastAPI()
 upload_mode_users = set()
+
 FILE_DB: Dict[str, List[Tuple[str, str]]] = {
     "images": [],
     "documents": [],
@@ -28,8 +28,7 @@ FILE_DB: Dict[str, List[Tuple[str, str]]] = {
 }
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-application = ApplicationBuilder().token(BOT_TOKEN).build()
+logger = logging.getLogger("bot")
 
 # ---------- Gofile Upload ----------
 def get_gofile_server():
@@ -45,7 +44,7 @@ def upload_to_gofile(filepath):
         return res.json()["data"]["downloadPage"]
     return None
 
-# ---------- Handlers ----------
+# ---------- Telegram Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
 
@@ -75,13 +74,16 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(f"{name}\n{url}")
 
+# ---------- Handle Files/Text ----------
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in upload_mode_users:
         await update.message.reply_text("❌ Please use /add before sending files.")
         return
 
-    file_type, tg_file, name = None, None, None
+    file_type = None
+    tg_file = None
+    name = None
 
     if update.message.photo:
         tg_file = update.message.photo[-1]
@@ -120,14 +122,30 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(tg_file.file_id)
     local_path = f"temp_{name}"
     await file.download_to_drive(local_path)
+
     gofile_link = upload_to_gofile(local_path)
     os.remove(local_path)
 
     if gofile_link:
         FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-        await update.message.reply_text(f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}\n{gofile_link}")
+        logger.info(f"File uploaded: {file_type} - {name} - {gofile_link}")
+        await update.message.reply_text(
+            f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}\n{gofile_link}"
+        )
     else:
         await update.message.reply_text("❌ Upload failed.")
+
+# ---------- Telegram App Initialization ----------
+application: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("add", add))
+application.add_handler(CommandHandler("done", done))
+
+for cmd in FILE_DB.keys():
+    application.add_handler(CommandHandler(cmd, list_files))
+
+application.add_handler(MessageHandler(filters.ALL, handle_file))
 
 # ---------- FastAPI Webhook ----------
 @app.post("/webhook")
@@ -137,17 +155,10 @@ async def telegram_webhook(req: Request):
     await application.process_update(update)
     return {"ok": True}
 
-# ---------- Register Handlers ----------
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("add", add))
-application.add_handler(CommandHandler("done", done))
-for cmd in FILE_DB.keys():
-    application.add_handler(CommandHandler(cmd, list_files))
-application.add_handler(MessageHandler(filters.ALL, handle_file))
-
-# ---------- Webhook Setup on Startup ----------
 @app.on_event("startup")
 async def startup_event():
+    await application.initialize()
+    await application.start()
     await application.bot.set_webhook(url=WEBHOOK_URL)
     await application.bot.set_my_commands([
         BotCommand("start", "Start bot"),
@@ -157,6 +168,6 @@ async def startup_event():
         BotCommand("documents", "List uploaded documents"),
         BotCommand("videos", "List uploaded videos"),
         BotCommand("audios", "List uploaded audios"),
-        BotCommand("texts", "List uploaded texts")
+        BotCommand("texts", "List uploaded texts"),
     ])
     logger.info("✅ Webhook and commands registered.")
