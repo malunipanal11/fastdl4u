@@ -5,22 +5,25 @@ from telegram import Update, BotCommand
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ContextTypes, filters as tg_filters
 )
-from telegram.constants import ChatAction
 from typing import Dict, List
 
-TOKEN = os.getenv("BOT_TOKEN", "your_bot_token_here")  # Replace with your actual token if testing locally
+# === Environment Variables ===
+TOKEN = os.getenv("BOT_TOKEN", "your_bot_token_here")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-webhook-url/render")
 
+# === Logging ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# === FastAPI and Bot App ===
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
+# === In-memory storage ===
 user_states: Dict[int, bool] = {}
 user_uploads: Dict[int, List[str]] = {}
 
-# ----------------- Command Handlers -----------------
+# === Command Handlers ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
@@ -49,7 +52,7 @@ async def list_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📸 Uploaded images:\n" + "\n".join(img.replace("image:", "") for img in images)
         )
 
-# ----------------- File/Text Handler -----------------
+# === File/Text Handler ===
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -82,7 +85,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_uploads[user_id].append(f"{file_type}:{file_id}")
         await update.message.reply_text(f"✅ Received {file_type}")
 
-# ----------------- Setup -----------------
+# === Add Handlers ===
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
@@ -90,12 +93,12 @@ application.add_handler(CommandHandler("done", done))
 application.add_handler(CommandHandler("images", list_images))
 
 application.add_handler(MessageHandler(
-    tg_filters.PHOTO | tg_filters.VIDEO | tg_filters.DOCUMENTS |
+    tg_filters.PHOTO | tg_filters.VIDEO | tg_filters.Document |
     tg_filters.AUDIO | tg_filters.VOICE | tg_filters.TEXT,
     handle_file
 ))
 
-# ----------------- FastAPI -----------------
+# === FastAPI Routes ===
 
 @app.on_event("startup")
 async def startup_event():
