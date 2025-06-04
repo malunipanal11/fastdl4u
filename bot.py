@@ -67,7 +67,10 @@ def admin_only(func):
         return await func(update, context)
     return wrapper
 
-# === HANDLERS ===
+# === COMMAND HANDLERS ===
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is alive and working!")
 
 @admin_only
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,6 +209,8 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 application = Application.builder().token(TOKEN).build()
 
+# === Handlers ===
+application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
 application.add_handler(CommandHandler("images", lambda u, c: send_from_category(u, c, "images")))
 application.add_handler(CommandHandler("videos", lambda u, c: send_from_category(u, c, "videos")))
@@ -222,17 +227,20 @@ application.add_handler(CommandHandler("textlist", lambda u, c: list_files(u, c,
 application.add_handler(CommandHandler("get", get_file))
 application.add_handler(CallbackQueryHandler(handle_cb))
 
+# === FastAPI Lifespan ===
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await application.initialize()
     await application.bot.set_webhook(url=WEBHOOK_URL)
-    yield  # on shutdown: nothing
+    yield
 
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
+    print("Webhook received:", json.dumps(data, indent=2))  # Optional debug
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return {"ok": True}
