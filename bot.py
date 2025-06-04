@@ -1,32 +1,44 @@
 import os
 import logging
 import aiohttp
+import glob
 from uuid import uuid4
 from fastapi import FastAPI, Request
 from telegram import Update, BotCommand
 from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    MessageHandler, 
-    ContextTypes, 
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
     filters
 )
+import atexit
 
 # ENV variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Should end in /webhook
 
 GOFILE_API = f"https://api.gofile.io/uploadFile?token={GOFILE_TOKEN}"
 logging.basicConfig(level=logging.INFO)
-FILE_DB = {}
-upload_mode_users = set()  # <- Track users in upload mode
 
-# FastAPI + Telegram
+FILE_DB = {}
+upload_mode_users = set()
+
+# FastAPI app
 app = FastAPI()
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# GoFile uploader
+# Cleanup temp files on exit
+def cleanup_temp_files():
+    for file in glob.glob("temp_*"):
+        try:
+            os.remove(file)
+        except Exception:
+            pass
+atexit.register(cleanup_temp_files)
+
+# Upload to GoFile
 async def upload_to_gofile(file_path):
     async with aiohttp.ClientSession() as session:
         with open(file_path, 'rb') as f:
@@ -34,40 +46,41 @@ async def upload_to_gofile(file_path):
             data.add_field('file', f, filename=os.path.basename(file_path))
             async with session.post(GOFILE_API, data=data) as resp:
                 res_json = await resp.json()
-                if res_json['status'] == 'ok':
+                if res_json.get('status') == 'ok':
                     return res_json['data']['downloadPage']
-                return None
+    return None
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is alive and working!")
+    await update.message.reply_text("✅ Bot is alive and ready!")
 
 # /add
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     upload_mode_users.add(user_id)
-    await update.message.reply_text("✅ Upload mode activated.\nNow send one or more files.\nWhen you're done, send /done.")
+    await update.message.reply_text("✅ Upload mode ON. Send files or text.\nWhen done, send /done.")
 
 # /done
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in upload_mode_users:
         upload_mode_users.discard(user_id)
-        await update.message.reply_text("✅ Upload mode ended.")
+        await update.message.reply_text("✅ Upload mode OFF.")
     else:
         await update.message.reply_text("ℹ️ You were not in upload mode.")
 
-# File handler
+# File/Text handler
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in upload_mode_users:
-        await update.message.reply_text("❌ Please use /add before sending files.")
+        await update.message.reply_text("❌ Use /add before sending files.")
         return
 
     file_type = None
     tg_file = None
     name = None
 
+    # Detect type
     if update.message.document:
         tg_file = update.message.document
         file_type = 'documents'
@@ -93,13 +106,13 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(name)
         if gofile_link:
             FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-            await update.message.reply_text(f"✅ Text saved: {gofile_link}")
+            await update.message.reply_text(f"✅ Text saved:\n{gofile_link}")
         else:
             await update.message.reply_text("❌ Failed to upload text.")
         return
 
     if not tg_file:
-        await update.message.reply_text("❌ Unsupported file type.")
+        await update.message.reply_text("❌ Unsupported or empty file.")
         return
 
     file = await context.bot.get_file(tg_file.file_id)
@@ -112,57 +125,72 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if gofile_link:
         FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-        await update.message.reply_text(f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}\n{gofile_link}")
+        await update.message.reply_text(f"✅ File saved as #{len(FILE_DB[file_type]):04d} in /{file_type}\n{gofile_link}")
     else:
         await update.message.reply_text("❌ Upload failed.")
 
-# List files
-async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# /files - list all
+async def list_all_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not FILE_DB:
+        await update.message.reply_text("❌ No files uploaded yet.")
+        return
+
+    message = "📂 ALL FILES:\n\n"
+    for ftype, items in FILE_DB.items():
+        message += f"🔸 {ftype.upper()}:\n"
+        for i, (name, link) in enumerate(items, 1):
+            message += f"#{i:04d} - {name}: {link}\n"
+        message += "\n"
+    await update.message.reply_text(message, disable_web_page_preview=True)
+
+# /images /videos etc
+async def list_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_type = update.message.text[1:]
     files = FILE_DB.get(file_type, [])
     if not files:
-        await update.message.reply_text(f"❌ No {file_type} stored yet.")
+        await update.message.reply_text(f"❌ No {file_type} uploaded yet.")
     else:
-        message = f"📂 {file_type.upper()} FILES:\n\n"
+        message = f"📁 {file_type.upper()}:\n\n"
         for i, (name, link) in enumerate(files, 1):
             message += f"#{i:04d} - {name}: {link}\n"
         await update.message.reply_text(message, disable_web_page_preview=True)
 
-# Bot commands
-async def set_bot_commands(application):
+# Commands
+async def set_bot_commands(app):
     commands = [
         BotCommand("start", "Start the bot"),
-        BotCommand("add", "Start file upload mode"),
-        BotCommand("done", "Finish uploading files"),
+        BotCommand("add", "Enter upload mode"),
+        BotCommand("done", "Exit upload mode"),
         BotCommand("files", "List all uploaded files"),
         BotCommand("images", "List uploaded images"),
-        BotCommand("audios", "List uploaded audio files"),
         BotCommand("videos", "List uploaded videos"),
-        BotCommand("texts", "List saved text messages"),
+        BotCommand("audios", "List uploaded audios"),
+        BotCommand("texts", "List uploaded texts"),
     ]
-    await application.bot.set_my_commands(commands)
+    await app.bot.set_my_commands(commands)
 
-# Register handlers
+# Handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("add", add))
 telegram_app.add_handler(CommandHandler("done", done))
-telegram_app.add_handler(CommandHandler("files", list_files))
-telegram_app.add_handler(CommandHandler("images", list_files))
-telegram_app.add_handler(CommandHandler("videos", list_files))
-telegram_app.add_handler(CommandHandler("audios", list_files))
-telegram_app.add_handler(CommandHandler("texts", list_files))
+telegram_app.add_handler(CommandHandler("files", list_all_files))
+telegram_app.add_handler(CommandHandler("images", list_by_type))
+telegram_app.add_handler(CommandHandler("videos", list_by_type))
+telegram_app.add_handler(CommandHandler("audios", list_by_type))
+telegram_app.add_handler(CommandHandler("texts", list_by_type))
 telegram_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
 
+# FastAPI startup
 @app.on_event("startup")
 async def on_startup():
     await telegram_app.initialize()
-    await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
     await set_bot_commands(telegram_app)
-    logging.info("Webhook set and bot commands registered.")
+    logging.info("✅ Webhook set and bot commands registered.")
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
-    return {"ok": True}
+    return {"ok": True"}
