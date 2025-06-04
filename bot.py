@@ -10,7 +10,7 @@ from telegram.constants import ChatAction
 from typing import Dict, List
 
 # --- Environment setup ---
-TOKEN = os.getenv("BOT_TOKEN", "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw)
+TOKEN = os.getenv("BOT_TOKEN", "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://fastdl4u.onrender.com")
 
 # --- Logging ---
