@@ -6,11 +6,16 @@ from typing import Dict, List, Tuple
 import httpx
 from fastapi import FastAPI, Request
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+)
 
+# ---------- Config ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("Missing BOT_TOKEN env variable")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+if not BOT_TOKEN or not WEBHOOK_URL:
+    raise ValueError("BOT_TOKEN and WEBHOOK_URL must be set.")
 
 app = FastAPI()
 upload_mode_users = set()
@@ -24,6 +29,7 @@ FILE_DB: Dict[str, List[Tuple[str, str]]] = {
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # ---------- Gofile Upload ----------
 def get_gofile_server():
@@ -39,7 +45,7 @@ def upload_to_gofile(filepath):
         return res.json()["data"]["downloadPage"]
     return None
 
-# ---------- Telegram Handlers ----------
+# ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
 
@@ -60,7 +66,6 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for name, url in category:
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Download", url=url)]])
-
         if cmd == "images":
             await update.message.reply_photo(photo=url, caption=name, reply_markup=keyboard)
         elif cmd == "videos":
@@ -70,16 +75,13 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(f"{name}\n{url}")
 
-# ---------- Handle Files/Text ----------
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in upload_mode_users:
         await update.message.reply_text("❌ Please use /add before sending files.")
         return
 
-    file_type = None
-    tg_file = None
-    name = None
+    file_type, tg_file, name = None, None, None
 
     if update.message.photo:
         tg_file = update.message.photo[-1]
@@ -118,53 +120,43 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(tg_file.file_id)
     local_path = f"temp_{name}"
     await file.download_to_drive(local_path)
-
     gofile_link = upload_to_gofile(local_path)
     os.remove(local_path)
 
     if gofile_link:
         FILE_DB.setdefault(file_type, []).append((name, gofile_link))
-        logger.info(f"File uploaded: {file_type} - {name} - {gofile_link}")
-        await update.message.reply_text(
-            f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}\n{gofile_link}"
-        )
+        await update.message.reply_text(f"✅ File saved in /{file_type} as #{len(FILE_DB[file_type]):04d}\n{gofile_link}")
     else:
         await update.message.reply_text("❌ Upload failed.")
 
 # ---------- FastAPI Webhook ----------
-@app.post("/")
+@app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, context.bot)
+    update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return {"ok": True}
 
-# ---------- Main ----------
-if __name__ == "__main__":
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+# ---------- Register Handlers ----------
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("add", add))
+application.add_handler(CommandHandler("done", done))
+for cmd in FILE_DB.keys():
+    application.add_handler(CommandHandler(cmd, list_files))
+application.add_handler(MessageHandler(filters.ALL, handle_file))
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("add", add))
-    application.add_handler(CommandHandler("done", done))
-
-    for cmd in FILE_DB.keys():
-        application.add_handler(CommandHandler(cmd, list_files))
-
-    application.add_handler(MessageHandler(filters.ALL, handle_file))
-
-    async def set_webhook():
-        await application.bot.set_webhook(url=os.getenv("RENDER_EXTERNAL_URL"))
-        await application.bot.set_my_commands([
-            BotCommand("start", "Start bot"),
-            BotCommand("add", "Enable upload mode"),
-            BotCommand("done", "Disable upload mode"),
-            BotCommand("images", "List uploaded images"),
-            BotCommand("documents", "List uploaded documents"),
-            BotCommand("videos", "List uploaded videos"),
-            BotCommand("audios", "List uploaded audios"),
-            BotCommand("texts", "List uploaded texts")
-        ])
-        logger.info("✅ Webhook set and bot commands registered.")
-
-    import asyncio
-    asyncio.run(set_webhook())
+# ---------- Webhook Setup on Startup ----------
+@app.on_event("startup")
+async def startup_event():
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    await application.bot.set_my_commands([
+        BotCommand("start", "Start bot"),
+        BotCommand("add", "Enable upload mode"),
+        BotCommand("done", "Disable upload mode"),
+        BotCommand("images", "List uploaded images"),
+        BotCommand("documents", "List uploaded documents"),
+        BotCommand("videos", "List uploaded videos"),
+        BotCommand("audios", "List uploaded audios"),
+        BotCommand("texts", "List uploaded texts")
+    ])
+    logger.info("✅ Webhook and commands registered.")
