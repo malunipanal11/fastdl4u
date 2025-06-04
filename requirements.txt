@@ -1,5 +1,4 @@
-python-telegram-bot==20.0
-fastapi
-uvicorn
+python-telegram-bot==20.7
 aiohttp
-python-dotenv
+fastapi
+uvicorn[standard]
