@@ -20,6 +20,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 GOFILE_API = f"https://api.gofile.io/uploadFile?token={GOFILE_TOKEN}"
 logging.basicConfig(level=logging.INFO)
 FILE_DB = {}
+upload_mode_users = set()  # <- Track users in upload mode
 
 # FastAPI + Telegram
 app = FastAPI()
@@ -43,10 +44,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # /add
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Upload a file after using /add.")
+    user_id = update.effective_user.id
+    upload_mode_users.add(user_id)
+    await update.message.reply_text("✅ Upload mode activated.\nNow send one or more files.\nWhen you're done, send /done.")
+
+# /done
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in upload_mode_users:
+        upload_mode_users.discard(user_id)
+        await update.message.reply_text("✅ Upload mode ended.")
+    else:
+        await update.message.reply_text("ℹ️ You were not in upload mode.")
 
 # File handler
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in upload_mode_users:
+        await update.message.reply_text("❌ Please use /add before sending files.")
+        return
+
     file_type = None
     tg_file = None
     name = None
@@ -115,7 +132,8 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "Start the bot"),
-        BotCommand("add", "Add/upload a file"),
+        BotCommand("add", "Start file upload mode"),
+        BotCommand("done", "Finish uploading files"),
         BotCommand("files", "List all uploaded files"),
         BotCommand("images", "List uploaded images"),
         BotCommand("audios", "List uploaded audio files"),
@@ -127,6 +145,7 @@ async def set_bot_commands(application):
 # Register handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("add", add))
+telegram_app.add_handler(CommandHandler("done", done))
 telegram_app.add_handler(CommandHandler("files", list_files))
 telegram_app.add_handler(CommandHandler("images", list_files))
 telegram_app.add_handler(CommandHandler("videos", list_files))
