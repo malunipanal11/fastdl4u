@@ -8,13 +8,13 @@ from telegram.ext import (
     Application, ApplicationBuilder, CommandHandler,
     MessageHandler, ContextTypes, filters
 )
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from telegram.ext.webhook import WebhookRequestHandler
 
-# Load from environment
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")  # e.g., https://your-app.onrender.com
+# Your credentials (used directly)
+BOT_TOKEN = "8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw"
+GOFILE_TOKEN = "7MaibQTxRi8BN0zKD8NDoCwXDABdA8Jq"
+WEBHOOK_DOMAIN = "https://fastdl4u.onrender.com"
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 
 # Logging
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 FILE_DB = {}
 
-# File upload logic
+# Upload to Gofile
 async def upload_to_gofile(file_path):
     async with aiohttp.ClientSession() as session:
         with open(file_path, 'rb') as f:
@@ -34,7 +34,7 @@ async def upload_to_gofile(file_path):
                 res_json = await resp.json()
                 return res_json['data']['downloadPage'] if res_json['status'] == 'ok' else None
 
-# Bot commands
+# Bot Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and working!")
 
@@ -90,7 +90,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Upload failed.")
 
 async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_type = update.message.text[1:]  # /images → images
+    file_type = update.message.text[1:]
     files = FILE_DB.get(file_type, [])
     if not files:
         await update.message.reply_text(f"❌ No {file_type} stored yet.")
@@ -100,7 +100,6 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"#{i:04d} - {name}\n"
         await update.message.reply_text(message, disable_web_page_preview=True)
 
-# Setup commands
 async def set_bot_commands(application: Application):
     commands = [
         BotCommand("start", "Start the bot"),
@@ -113,7 +112,7 @@ async def set_bot_commands(application: Application):
     ]
     await application.bot.set_my_commands(commands)
 
-# Build Telegram app
+# Build Application
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
@@ -123,19 +122,16 @@ application.add_handler(CommandHandler("videos", list_files))
 application.add_handler(CommandHandler("audios", list_files))
 application.add_handler(CommandHandler("texts", list_files))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_file))
-
 application.post_init = lambda _: set_bot_commands(application)
 
-# FastAPI app
+# FastAPI
 fastapi_app = FastAPI()
 
 class Handler(WebhookRequestHandler):
     def __init__(self): super().__init__(application=application, webhook_path=WEBHOOK_PATH)
 
-handler = Handler()
-fastapi_app.add_route(WEBHOOK_PATH, handler, methods=["POST"])
+fastapi_app.add_route(WEBHOOK_PATH, Handler(), methods=["POST"])
 
-# Set webhook on startup
 @fastapi_app.on_event("startup")
 async def on_startup():
     await application.bot.set_webhook(f"{WEBHOOK_DOMAIN}{WEBHOOK_PATH}")
