@@ -11,7 +11,7 @@ import httpx
 
 # --- Environment Configuration ---
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ✅ FIXED: Uses correct env var for webhook
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("WEBHOOK_DOMAIN", "") + "/webhook"
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
@@ -55,9 +55,7 @@ async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
         server = response.json()["data"]["server"]
         files = {"file": (filename, file_bytes)}
         params = {"token": GOFILE_TOKEN}
-        upload_resp = await client.post(
-            f"https://{server}.gofile.io/uploadFile", files=files, params=params
-        )
+        upload_resp = await client.post(f"https://{server}.gofile.io/uploadFile", files=files, params=params)
         data = upload_resp.json()
         if data["status"] != "ok":
             raise Exception(f"Gofile upload failed: {data}")
@@ -250,6 +248,7 @@ async def startup_event():
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     update_dict = await req.json()
+    logger.info(f"🔔 Telegram webhook update: {update_dict}")
     update = Update.de_json(update_dict)
     await application.process_update(update)
     return {"status": "ok"}
