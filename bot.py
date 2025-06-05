@@ -11,9 +11,10 @@ import httpx
 
 # --- Environment Configuration ---
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("WEBHOOK_DOMAIN", "") + "/webhook"
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN", "")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", f"{WEBHOOK_DOMAIN}/webhook")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
@@ -249,7 +250,7 @@ async def startup_event():
 async def telegram_webhook(req: Request):
     update_dict = await req.json()
     logger.info(f"🔔 Telegram webhook update: {update_dict}")
-    update = Update.de_json(update_dict)
+    update = Update.de_json(update_dict, application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
