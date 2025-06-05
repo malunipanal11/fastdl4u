@@ -3,19 +3,17 @@ import json
 import logging
 import random
 from fastapi import FastAPI, Request
-from telegram import (
-    Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-)
+from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, ContextTypes,
-    CallbackQueryHandler, filters
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
 )
 from typing import Dict, List
 import httpx
 
-# --- Environment setup ---
+# --- Environment Variables ---
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN") + "/webhook"
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
@@ -23,29 +21,27 @@ ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-# --- FastAPI + Telegram App ---
+# --- FastAPI App + Telegram Bot ---
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
 # --- Session Management ---
-user_states: Dict[int, bool] = {}
-user_uploads: Dict[int, List[Dict[str, str]]] = {}
+user_states: Dict[int, bool] = {}  # Tracks whether user is in upload mode
+user_uploads: Dict[int, List[Dict[str, str]]] = {}  # Stores uploads per user
 
-# --- Gofile upload ---
+# --- Helper to upload to Gofile ---
 async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
     async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.gofile.io/getServer")
-        server = response.json()["data"]["server"]
+        server_resp = await client.get("https://api.gofile.io/getServer")
+        server = server_resp.json()["data"]["server"]
         files = {"file": (filename, file_bytes)}
         params = {"token": GOFILE_TOKEN}
         upload_resp = await client.post(
-            f"https://{server}.gofile.io/uploadFile",
-            files=files,
-            params=params
+            f"https://{server}.gofile.io/uploadFile", files=files, params=params
         )
         return upload_resp.json()["data"]["downloadPage"]
 
-# --- Commands ---
+# --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
 
@@ -142,7 +138,7 @@ async def list_uploads(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"- `{item['serial']}` ({item['type']})\n"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# --- Callback Buttons ---
+# --- Callback Handler ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -157,12 +153,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text("🗑️ File deleted.")
                     return
         await query.edit_message_text("❌ File not found.")
-
     elif data.startswith("send:"):
         url = data.split(":", 1)[1]
         await query.message.reply_text(f"📤 File URL: {url}")
 
-# --- Upload Handler ---
+# --- File and Text Upload Handler ---
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Received file from user: {user_id}")
@@ -176,7 +171,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         tg_file = await update.message.photo[-1].get_file()
         file_type = "images"
-        filename += ".jpg"
+        filename = "image.jpg"
     elif update.message.document:
         tg_file = await update.message.document.get_file()
         file_type = "files"
@@ -219,13 +214,16 @@ application.add_handler(CommandHandler("texts", send_random_from_category))
 application.add_handler(CommandHandler("get", get_by_serial))
 application.add_handler(CommandHandler("list", list_uploads))
 application.add_handler(CallbackQueryHandler(handle_callback))
-application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.TEXT, handle_file))
+application.add_handler(MessageHandler(
+    filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.TEXT,
+    handle_file
+))
 
-# --- FastAPI Integration ---
+# --- FastAPI Startup and Webhook ---
 @app.on_event("startup")
 async def startup_event():
     await application.initialize()
-    await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    await application.bot.set_webhook(f"{WEBHOOK_URL}")
     commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("images", "Random image"),
