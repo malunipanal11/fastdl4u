@@ -1,43 +1,21 @@
-import os
-import json
-import logging
-import random
-import atexit
-
+import os, json, logging, random, atexit
 from typing import Dict, List
-
 from fastapi import FastAPI, Request
-from telegram import (
-    Update,
-    BotCommand,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 import httpx
 
-# --- Configuration ---
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("WEBHOOK_DOMAIN", "") + "/webhook"
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
-# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-# --- FastAPI & Telegram Setup ---
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
-# --- State ---
 user_states: Dict[int, bool] = {}
 user_uploads: Dict[int, List[Dict[str, str]]] = {}
 
@@ -57,14 +35,11 @@ type_map = {
     "videos": "video",
     "audios": "audio",
     "files": "file",
-    "texts": "text",
+    "texts": "text"
 }
 
-ALLOWED_EXTENSIONS = (
-    ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3", ".txt", ".pdf", ".docx", ".zip"
-)
+ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3", ".txt", ".pdf", ".docx", ".zip")
 
-# --- Gofile Upload ---
 async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -73,22 +48,20 @@ async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
             if server_data["status"] != "ok":
                 raise Exception(f"Failed to get server: {server_data}")
             server = server_data["data"]["server"]
-
+            upload_url = f"https://{server}.gofile.io/uploadFile"
             files = {"file": (filename, file_bytes)}
             params = {"token": GOFILE_TOKEN}
-            upload_url = f"https://{server}.gofile.io/uploadFile"
             upload_resp = await client.post(upload_url, files=files, params=params)
             upload_data = upload_resp.json()
-
             if upload_data["status"] != "ok":
                 raise Exception(f"Upload failed: {upload_data}")
-
             return upload_data["data"]["downloadPage"]
     except Exception as e:
         logger.error(f"Upload to Gofile failed: {e}", exc_info=True)
         raise
 
-# --- Command Handlers ---
+# --- Commands ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
 
@@ -102,9 +75,19 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Upload mode ON. Send files or text.\nWhen done, send /done.")
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_states[user_id] = False
+    user_states[update.effective_user.id] = False
     await update.message.reply_text("✅ Upload mode OFF.")
+
+async def list_uploads(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    items = user_uploads.get(user_id, [])
+    if not items:
+        await update.message.reply_text("❌ No files uploaded.")
+        return
+    msg = "📦 Your uploads:\n"
+    for item in items:
+        msg += f"- {item['serial']} ({item['type']})\n"
+    await update.message.reply_text(msg)
 
 async def send_random_from_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = update.message.text[1:].lower()
@@ -115,17 +98,16 @@ async def send_random_from_category(update: Update, context: ContextTypes.DEFAUL
         return
     file = random.choice(all_items)
     keyboard = [[
-        InlineKeyboardButton("▶️ Play", url=file["url"]),
+        InlineKeyboardButton("▶️ View", url=file["url"]),
         InlineKeyboardButton("⬇️ Download", url=file["url"])
     ]]
     if user_id in ADMIN_IDS:
         keyboard[0].append(InlineKeyboardButton("🗑️ Delete", callback_data=f"delete:{file['url']}"))
-        keyboard[0].append(InlineKeyboardButton("📤 Send", callback_data=f"send:{file['url']}"))
     await update.message.reply_text(f"📂 Random {category}:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def get_by_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Usage: /get <serial> (e.g., img1, video2)")
+        await update.message.reply_text("❌ Usage: /get <serial> (e.g., img1)")
         return
     serial = context.args[0].lower()
     for full_type, short in type_map.items():
@@ -140,28 +122,15 @@ async def get_by_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             file = all_items[index]
             keyboard = [[
-                InlineKeyboardButton("▶️ Play", url=file["url"]),
+                InlineKeyboardButton("▶️ View", url=file["url"]),
                 InlineKeyboardButton("⬇️ Download", url=file["url"])
             ]]
-            if update.effective_user.id in ADMIN_IDS:
-                keyboard[0].append(InlineKeyboardButton("🗑️ Delete", callback_data=f"delete:{file['url']}"))
-                keyboard[0].append(InlineKeyboardButton("📤 Send", callback_data=f"send:{file['url']}"))
-            await update.message.reply_text(f"📦 Here is {serial}:", reply_markup=InlineKeyboardMarkup(keyboard))
+            await update.message.reply_text(f"📦 {serial}:", reply_markup=InlineKeyboardMarkup(keyboard))
             return
     await update.message.reply_text("❌ Invalid serial format.")
 
-async def list_uploads(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    items = user_uploads.get(user_id, [])
-    if not items:
-        await update.message.reply_text("❌ No files uploaded.")
-        return
-    msg = "📦 Your uploads:\n"
-    for item in items:
-        msg += f"- {item['serial']} ({item['type']})\n"
-    await update.message.reply_text(msg)
+# --- Callback ---
 
-# --- Callback Handler ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -175,11 +144,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text("🗑️ File deleted.")
                     return
         await query.edit_message_text("❌ File not found.")
-    elif data.startswith("send:"):
-        url = data.split(":", 1)[1]
-        await query.message.reply_text(f"📤 File URL: {url}")
 
-# --- File/Text Upload Handler ---
+# --- Upload Handler ---
+
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -192,7 +159,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         tg_file = await update.message.photo[-1].get_file()
         file_type = "images"
-        filename += ".jpg"
+        filename = "image.jpg"
     elif update.message.document:
         tg_file = await update.message.document.get_file()
         file_type = "files"
@@ -217,7 +184,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = sum(1 for f in user_uploads[user_id] if f["type"] == "texts")
         serial_number = f"text{count + 1}"
         user_uploads[user_id].append({"type": "texts", "url": url, "serial": serial_number})
-        await update.message.reply_text(f"✅ Received `{serial_number}`", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ Uploaded `{serial_number}`", parse_mode="Markdown")
         return
 
     if tg_file:
@@ -235,41 +202,46 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = sum(1 for f in user_uploads[user_id] if f["type"] == file_type)
         serial_number = f"{type_map[file_type]}{count + 1}"
         user_uploads[user_id].append({"type": file_type, "url": url, "serial": serial_number})
-        await update.message.reply_text(f"✅ Received `{serial_number}`", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ Uploaded `{serial_number}`", parse_mode="Markdown")
 
 # --- Register Handlers ---
+
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
 application.add_handler(CommandHandler("done", done))
-application.add_handler(CommandHandler("images", send_random_from_category))
-application.add_handler(CommandHandler("videos", send_random_from_category))
-application.add_handler(CommandHandler("audios", send_random_from_category))
-application.add_handler(CommandHandler("files", send_random_from_category))
-application.add_handler(CommandHandler("texts", send_random_from_category))
-application.add_handler(CommandHandler("get", get_by_serial))
 application.add_handler(CommandHandler("list", list_uploads))
+application.add_handler(CommandHandler("get", get_by_serial))
+for cat in ["images", "videos", "audios", "files", "texts"]:
+    application.add_handler(CommandHandler(cat, send_random_from_category))
 application.add_handler(CallbackQueryHandler(handle_callback))
 application.add_handler(MessageHandler(filters.ALL, handle_file))
 
-# --- FastAPI Webhook Integration ---
+# --- Webhook Setup ---
+
 @app.on_event("startup")
-async def on_startup():
+async def startup_event():
     await application.initialize()
     await application.bot.set_webhook(WEBHOOK_URL)
-    await application.start()
-    logger.info("✅ Bot started with webhook.")
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await application.stop()
-    await application.shutdown()
-    logger.info("🔻 Bot shutdown complete.")
+    commands = [
+        BotCommand("start", "Start bot"),
+        BotCommand("images", "Random image"),
+        BotCommand("videos", "Random video"),
+        BotCommand("audios", "Random audio"),
+        BotCommand("files", "Random file"),
+        BotCommand("texts", "Random text"),
+        BotCommand("get", "Get by serial"),
+        BotCommand("list", "List uploads")
+    ]
+    if ADMIN_IDS:
+        commands += [BotCommand("add", "Start upload"), BotCommand("done", "Stop upload")]
+    await application.bot.set_my_commands(commands)
+    logger.info("✅ Webhook and commands registered.")
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
-    update_data = await req.json()
-    update = Update.de_json(update_data, application.bot)
-    await application.update_queue.put(update)
+    update_dict = await req.json()
+    update = Update.de_json(update_dict, application.bot)
+    await application.process_update(update)
     return {"status": "ok"}
 
 @app.get("/")
