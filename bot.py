@@ -16,7 +16,7 @@ import httpx
 # --- Environment setup ---
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ✅ Fixed: now using WEBHOOK_URL directly
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
@@ -153,11 +153,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = data.split(":", 1)[1]
         await query.message.reply_text(f"📤 File URL: {url}")
 
-# --- Upload Handler ---
+# --- Upload Handler with Logging ---
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"📩 File received from {user_id}. Upload mode: {user_states.get(user_id)}")
+
     if user_id not in ADMIN_IDS or not user_states.get(user_id, False):
+        logger.warning(f"❌ Upload rejected. User not allowed or not in upload mode.")
         return
 
     file_type, tg_file, filename = None, None, "file"
@@ -183,6 +186,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = await upload_to_gofile(content, "text.txt")
         serial_number = f"text{sum(1 for f in user_uploads[user_id] if f['type'] == 'texts') + 1}"
         user_uploads[user_id].append({"type": "texts", "url": url, "serial": serial_number})
+        logger.info(f"✅ Text saved. Total texts for {user_id}: {len([f for f in user_uploads[user_id] if f['type'] == 'texts'])}")
         await update.message.reply_text("✅ Received text")
         return
 
@@ -192,6 +196,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = sum(1 for f in user_uploads[user_id] if f["type"] == file_type)
         serial_number = f"{file_type[:-1]}{count + 1}"
         user_uploads[user_id].append({"type": file_type, "url": url, "serial": serial_number})
+        logger.info(f"✅ {file_type[:-1].capitalize()} saved for {user_id}. Serial: {serial_number}")
         await update.message.reply_text(f"✅ Received {file_type}")
 
 # --- Register Handlers ---
