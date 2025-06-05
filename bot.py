@@ -11,7 +11,7 @@ import httpx
 
 # --- Environment Configuration ---
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN") + "/webhook"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ✅ FIXED: Uses correct env var for webhook
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
