@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # Full Render URL, e.g. https://mybot.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # Full Render URL, e.g. https://yourbot.onrender.com
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN", "")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
@@ -241,7 +241,7 @@ application.add_handler(MessageHandler(filters.ALL, handle_file))
 @app.on_event("startup")
 async def startup_event():
     await application.initialize()
-    await application.bot.set_webhook(WEBHOOK_URL)
+    await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")  # <-- FIXED PATH
     commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("images", "Random image"),
@@ -257,13 +257,13 @@ async def startup_event():
     await application.bot.set_my_commands(commands)
     logger.info("✅ Webhook and commands registered.")
 
-@app.post("/")
+@app.post("/webhook")  # <-- FIXED PATH
 async def telegram_webhook(req: Request):
     update_dict = await req.json()
     update = Update.de_json(update_dict, application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
-@app.get("/")
+@app.get("/")  # Health check
 async def root():
     return {"message": "Bot is running"}
