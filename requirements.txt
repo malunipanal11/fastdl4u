@@ -1,6 +1,6 @@
-python-telegram-bot==20.6
 fastapi
-uvicorn
-yt-dlp==2024.05.27
-httpx
 python-dotenv
+httpx
+yt-dlp
+python-telegram-bot==20.6
+uvicorn
