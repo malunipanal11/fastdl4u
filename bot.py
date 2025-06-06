@@ -266,3 +266,12 @@ async def telegram_webhook(req: Request):
 @app.get("/")
 async def root():
     return {"message": "Bot is running"}
+
+@app.get("/test-upload")
+async def test_upload():
+    test_content = b"Hello from test route!"
+    try:
+        url = await upload_to_gofile(test_content, "hello.txt")
+        return {"success": True, "url": url}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
