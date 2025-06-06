@@ -6,12 +6,16 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 from yt_dlp import YoutubeDL
 import httpx
 from dotenv import load_dotenv
+import uuid
 
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
+
+if not TOKEN or not WEBHOOK_URL or not GOFILE_TOKEN:
+    raise ValueError("Environment variables not set")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
@@ -20,8 +24,9 @@ app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
 # Downloader function
-async def download_video(url: str, filename: str = "/tmp/video.mp4") -> bytes:
+async def download_video(url: str) -> tuple[bytes, str]:
     try:
+        filename = f"/tmp/{uuid.uuid4()}.mp4"
         ydl_opts = {
             'format': 'best',
             'outtmpl': filename,
@@ -42,7 +47,7 @@ async def download_video(url: str, filename: str = "/tmp/video.mp4") -> bytes:
             ydl.download([url])
 
         with open(filename, 'rb') as f:
-            return f.read()
+            return f.read(), filename
     except Exception as e:
         logger.error(f"yt-dlp download failed: {e}")
         raise
@@ -80,33 +85,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("⏳ Downloading...")
     try:
-        video_bytes = await download_video(text)
-        url = await upload_to_gofile(video_bytes, "video.mp4")
-        await update.message.reply_text(f"✅ [Download here]({url})", parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error handling message: {e}")
-        await update.message.reply_text("❌ Failed to download video.")
-
-# Register Telegram handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# FastAPI setup
-@app.on_event("startup")
-async def on_startup():
-    await application.initialize()
-    await application.bot.set_webhook(WEBHOOK_URL)
-    await application.bot.set_my_commands([
-        BotCommand("start", "Start the bot")
-    ])
-    logger.info("✅ Webhook registered.")
-
-@app.post("/")
-async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
-    return {"status": "ok"}
-
-@app.get("/")
-async def root():
-    return {"message": "Bot is running"}
+        video_bytes, filename = await
