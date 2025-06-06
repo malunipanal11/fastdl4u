@@ -1,5 +1,4 @@
-import os
-import logging
+import os, logging, tempfile
 from fastapi import FastAPI, Request
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
@@ -19,81 +18,88 @@ logger = logging.getLogger("bot")
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
-# -- Downloader function --
-async def download_video(url: str, filename: str = "video.mp4") -> bytes:
+# ---- Downloader ----
+async def download_video(url: str) -> str:
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+            filename = tmp_file.name
+
         ydl_opts = {
             'format': 'best',
-            'outtmpl': f'/tmp/{filename}',
+            'outtmpl': filename,
             'quiet': True,
             'noplaylist': True,
+            'geo_bypass': True,
+            'nocheckcertificate': True,
+            'merge_output_format': 'mp4',
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0',
             }
         }
+
         with YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Downloading {url}")
             ydl.download([url])
-        with open(f'/tmp/{filename}', 'rb') as f:
-            return f.read()
+
+        return filename
     except Exception as e:
-        logger.error(f"yt-dlp download failed: {e}")
+        logger.error(f"Download failed: {e}")
         raise
 
-# -- Gofile uploader --
-async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
+# ---- Upload to Gofile ----
+async def upload_to_gofile(filepath: str) -> str:
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient() as client:
             server_resp = await client.get("https://api.gofile.io/getServer")
-            server_data = server_resp.json()
-            server = server_data["data"]["server"]
+            server = server_resp.json()["data"]["server"]
 
-            files = {"file": (filename, file_bytes)}
-            params = {"token": GOFILE_TOKEN}
+            with open(filepath, "rb") as f:
+                files = {"file": (os.path.basename(filepath), f)}
+                params = {"token": GOFILE_TOKEN}
+                upload_url = f"https://{server}.gofile.io/uploadFile"
+                resp = await client.post(upload_url, files=files, params=params)
 
-            upload_url = f"https://{server}.gofile.io/uploadFile"
-            upload_resp = await client.post(upload_url, files=files, params=params)
-            upload_data = upload_resp.json()
-
-            return upload_data["data"]["downloadPage"]
+        return resp.json()["data"]["downloadPage"]
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise
 
-# -- Telegram Handlers --
+# ---- Commands ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Send a video link (YouTube, Instagram, etc.) and I'll return a downloadable link.")
+    await update.message.reply_text(
+        "👋 Send a video link (YouTube, Instagram, TikTok, etc.), and I'll give you a download link."
+    )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.startswith("http"):
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if not url.startswith("http"):
         return
 
     await update.message.reply_text("⏳ Downloading...")
+
     try:
-        video_bytes = await download_video(text)
-        url = await upload_to_gofile(video_bytes, "video.mp4")
-        await update.message.reply_text(f"✅ [Download here]({url})", parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error: {e}")
+        file_path = await download_video(url)
+        dl_url = await upload_to_gofile(file_path)
+        await update.message.reply_text(f"✅ [Click to Download]({dl_url})", parse_mode="Markdown")
+        os.remove(file_path)
+    except Exception:
         await update.message.reply_text("❌ Failed to download video.")
 
-# -- Register Handlers --
+# ---- Register Bot Handlers ----
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
-# -- FastAPI Events --
+# ---- FastAPI Webhook Setup ----
 @app.on_event("startup")
-async def on_startup():
+async def startup():
     await application.initialize()
     await application.bot.set_webhook(WEBHOOK_URL)
-    await application.bot.set_my_commands([
-        BotCommand("start", "Start the bot"),
-    ])
-    logger.info("✅ Webhook registered.")
+    await application.bot.set_my_commands([BotCommand("start", "Start the bot")])
+    logging.info("✅ Webhook registered.")
 
 @app.post("/")
-async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
+async def telegram_webhook(req: Request):
+    update = Update.de_json(await req.json(), application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
