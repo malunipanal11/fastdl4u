@@ -9,22 +9,25 @@ from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardBut
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 from typing import Dict, List
 import httpx
-from dotenv import load_dotenv
 
-# Load environment
+from dotenv import load_dotenv
 load_dotenv()
 
+# --- Config ---
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN", "")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN", "")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
+# --- FastAPI & Telegram Setup ---
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
+# --- Persistent State ---
 user_states: Dict[int, bool] = {}
 user_uploads: Dict[int, List[Dict[str, str]]] = {}
 
@@ -39,34 +42,21 @@ def save_data():
     with open("uploads.json", "w") as f:
         json.dump(user_uploads, f)
 
-type_map = {
-    "images": "img",
-    "videos": "video",
-    "audios": "audio",
-    "files": "file",
-    "texts": "text"
-}
-
-ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3", ".txt", ".pdf", ".docx", ".zip")
-
-# --- Updated Gofile uploader with logging ---
+# --- Upload Function ---
 async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             server_resp = await client.get("https://api.gofile.io/getServer")
-            logger.info(f"Gofile getServer raw: {server_resp.text}")
+            server_resp.raise_for_status()
             server_data = server_resp.json()
-            if server_data["status"] != "ok":
-                raise Exception(f"GetServer error: {server_data}")
             server = server_data["data"]["server"]
 
             files = {"file": (filename, file_bytes)}
-            params = {"token": GOFILE_TOKEN}
+            data = {"token": GOFILE_TOKEN}
 
             upload_url = f"https://{server}.gofile.io/uploadFile"
-            logger.info(f"Uploading to: {upload_url}")
-            upload_resp = await client.post(upload_url, files=files, params=params)
-            logger.info(f"Upload response text: {upload_resp.text}")
+            upload_resp = await client.post(upload_url, data=data, files=files)
+            upload_resp.raise_for_status()
             upload_data = upload_resp.json()
 
             if upload_data["status"] != "ok":
@@ -74,10 +64,19 @@ async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
 
             return upload_data["data"]["downloadPage"]
     except Exception as e:
-        logger.error(f"Gofile upload failed: {e}", exc_info=True)
+        logger.error(f"Upload to GoFile failed: {e}", exc_info=True)
         raise
 
-# --- Command handlers ---
+# --- Command Handlers ---
+type_map = {
+    "images": "img",
+    "videos": "video",
+    "audios": "audio",
+    "files": "file",
+    "texts": "text"
+}
+ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3", ".txt", ".pdf", ".docx", ".zip")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and ready!")
 
@@ -147,7 +146,7 @@ async def list_uploads(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📦 Your uploads:\n" + "\n".join(f"- {item['serial']} ({item['type']})" for item in items)
     await update.message.reply_text(msg)
 
-# --- Callback query handler ---
+# --- Callback Handler ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -165,7 +164,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = data.split(":", 1)[1]
         await query.message.reply_text(f"📤 File URL: {url}")
 
-# --- Upload handler ---
+# --- File/Text Upload Handler ---
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -223,7 +222,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_uploads[user_id].append({"type": file_type, "url": url, "serial": serial_number})
         await update.message.reply_text(f"✅ Received `{serial_number}`", parse_mode="Markdown")
 
-# --- Handlers ---
+# --- Register Handlers ---
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
 application.add_handler(CommandHandler("done", done))
@@ -237,12 +236,12 @@ application.add_handler(CommandHandler("list", list_uploads))
 application.add_handler(CallbackQueryHandler(handle_callback))
 application.add_handler(MessageHandler(filters.ALL, handle_file))
 
-# --- FastAPI startup ---
+# --- Webhook Routes ---
 @app.on_event("startup")
 async def startup_event():
     await application.initialize()
     await application.bot.set_webhook(WEBHOOK_URL)
-    await application.bot.set_my_commands([
+    commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("images", "Random image"),
         BotCommand("videos", "Random video"),
@@ -253,7 +252,8 @@ async def startup_event():
         BotCommand("list", "List your uploads"),
         BotCommand("add", "Enter upload mode"),
         BotCommand("done", "Exit upload mode")
-    ])
+    ]
+    await application.bot.set_my_commands(commands)
     logger.info("✅ Webhook and commands registered.")
 
 @app.post("/")
@@ -266,12 +266,3 @@ async def telegram_webhook(req: Request):
 @app.get("/")
 async def root():
     return {"message": "Bot is running"}
-
-@app.get("/test-upload")
-async def test_upload():
-    test_content = b"Hello from test route!"
-    try:
-        url = await upload_to_gofile(test_content, "hello.txt")
-        return {"success": True, "url": url}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
