@@ -9,13 +9,13 @@ from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardBut
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 from typing import Dict, List
 import httpx
+from dotenv import load_dotenv
 
 # --- Configuration ---
-from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # Full Render URL, e.g. https://yourbot.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN", "")  # https://yourbot.onrender.com
 GOFILE_TOKEN = os.getenv("GOFILE_TOKEN", "")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
@@ -27,7 +27,6 @@ logger = logging.getLogger("bot")
 app = FastAPI()
 application: Application = Application.builder().token(TOKEN).build()
 
-# --- Bot State ---
 user_states: Dict[int, bool] = {}
 user_uploads: Dict[int, List[Dict[str, str]]] = {}
 
@@ -51,30 +50,31 @@ type_map = {
 }
 ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3", ".txt", ".pdf", ".docx", ".zip")
 
-
 # --- Gofile Upload ---
 async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info("Requesting Gofile server...")
             server_resp = await client.get("https://api.gofile.io/getServer")
             server_data = server_resp.json()
             if server_data["status"] != "ok":
-                raise Exception(f"Failed to get server: {server_data}")
+                raise Exception(f"GetServer error: {server_data}")
             server = server_data["data"]["server"]
 
             files = {"file": (filename, file_bytes)}
             params = {"token": GOFILE_TOKEN}
-
             upload_url = f"https://{server}.gofile.io/uploadFile"
+            logger.info(f"Uploading to {upload_url} ...")
             upload_resp = await client.post(upload_url, files=files, params=params)
             upload_data = upload_resp.json()
 
             if upload_data["status"] != "ok":
-                raise Exception(f"Upload failed: {upload_data}")
+                raise Exception(f"Upload error: {upload_data}")
 
+            logger.info(f"Upload successful: {upload_data['data']['downloadPage']}")
             return upload_data["data"]["downloadPage"]
     except Exception as e:
-        logger.error(f"Upload to Gofile failed: {e}", exc_info=True)
+        logger.error(f"❌ Gofile upload failed: {e}", exc_info=True)
         raise
 
 # --- Command Handlers ---
@@ -113,7 +113,7 @@ async def send_random_from_category(update: Update, context: ContextTypes.DEFAUL
 
 async def get_by_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Usage: /get <serial> (e.g., img1, video2)")
+        await update.message.reply_text("❌ Usage: /get <serial>")
         return
     serial = context.args[0].lower()
     for full_type, short in type_map.items():
@@ -173,7 +173,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in ADMIN_IDS or not user_states.get(user_id, False):
         return
 
-    file_type, tg_file, filename = None, None, "file"
+    tg_file, file_type, filename = None, None, "file"
 
     if update.message.photo:
         tg_file = await update.message.photo[-1].get_file()
@@ -192,38 +192,32 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_type = "audios"
         filename = update.message.audio.file_name or "audio.mp3"
     elif update.message.text:
-        content = update.message.text.encode()
         try:
-            url = await upload_to_gofile(content, "text.txt")
+            url = await upload_to_gofile(update.message.text.encode(), "text.txt")
+            user_uploads.setdefault(user_id, [])
+            count = sum(1 for f in user_uploads[user_id] if f["type"] == "texts")
+            serial = f"text{count + 1}"
+            user_uploads[user_id].append({"type": "texts", "url": url, "serial": serial})
+            await update.message.reply_text(f"✅ Received `{serial}`", parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Text upload failed: {e}")
-            await update.message.reply_text("❌ Upload failed.")
-            return
-        user_uploads.setdefault(user_id, [])
-        count = sum(1 for f in user_uploads[user_id] if f["type"] == "texts")
-        serial_number = f"text{count + 1}"
-        user_uploads[user_id].append({"type": "texts", "url": url, "serial": serial_number})
-        await update.message.reply_text(f"✅ Received `{serial_number}`", parse_mode="Markdown")
+            await update.message.reply_text(f"❌ Upload failed: {e}")
         return
 
     if tg_file:
-        if not filename.lower().endswith(ALLOWED_EXTENSIONS):
-            await update.message.reply_text("❌ File type not allowed.")
-            return
         try:
+            logger.info(f"Downloading file: {filename}")
             file_bytes = await tg_file.download_as_bytearray()
             url = await upload_to_gofile(file_bytes, filename)
+            user_uploads.setdefault(user_id, [])
+            count = sum(1 for f in user_uploads[user_id] if f["type"] == file_type)
+            serial = f"{type_map[file_type]}{count + 1}"
+            user_uploads[user_id].append({"type": file_type, "url": url, "serial": serial})
+            await update.message.reply_text(f"✅ Received `{serial}`", parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Upload failed: {e}")
-            await update.message.reply_text("❌ Upload failed.")
-            return
-        user_uploads.setdefault(user_id, [])
-        count = sum(1 for f in user_uploads[user_id] if f["type"] == file_type)
-        serial_number = f"{type_map[file_type]}{count + 1}"
-        user_uploads[user_id].append({"type": file_type, "url": url, "serial": serial_number})
-        await update.message.reply_text(f"✅ Received `{serial_number}`", parse_mode="Markdown")
+            await update.message.reply_text(f"❌ Upload failed: {e}")
+            logger.error(f"Upload failed: {e}", exc_info=True)
 
-# --- Register Handlers ---
+# --- Handlers ---
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add))
 application.add_handler(CommandHandler("done", done))
@@ -237,11 +231,11 @@ application.add_handler(CommandHandler("list", list_uploads))
 application.add_handler(CallbackQueryHandler(handle_callback))
 application.add_handler(MessageHandler(filters.ALL, handle_file))
 
-# --- FastAPI Webhook ---
+# --- FastAPI Routes ---
 @app.on_event("startup")
-async def startup_event():
+async def on_startup():
     await application.initialize()
-    await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")  # <-- FIXED PATH
+    await application.bot.set_webhook(WEBHOOK_URL)
     commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("images", "Random image"),
@@ -257,13 +251,21 @@ async def startup_event():
     await application.bot.set_my_commands(commands)
     logger.info("✅ Webhook and commands registered.")
 
-@app.post("/webhook")  # <-- FIXED PATH
+@app.post("/")
 async def telegram_webhook(req: Request):
     update_dict = await req.json()
     update = Update.de_json(update_dict, application.bot)
     await application.process_update(update)
     return {"status": "ok"}
 
-@app.get("/")  # Health check
+@app.get("/")
 async def root():
     return {"message": "Bot is running"}
+
+@app.get("/test-upload")
+async def test_upload():
+    try:
+        url = await upload_to_gofile(b"Hello from Render!", "test.txt")
+        return {"success": True, "url": url}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
