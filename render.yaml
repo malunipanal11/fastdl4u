@@ -2,10 +2,15 @@ services:
   - type: web
     name: telegram-mega-bot
     runtime: python
-    env: 
-      - key: PYTHON_VERSION
-        value: 3.10
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python bot.py"
+    buildCommand: ""
+    startCommand: python bot.py
     envVars:
-      - fromFile: .env
+      - key: BOT_TOKEN
+        value: 8186227901:AAH9MU07NdnAUFiywAIMpxHitA5V3O1b3hw
+      - key: MEGA_EMAIL
+        value: girlsgkadda@gmail.com
+      - key: MEGA_PASSWORD
+        value: m3G@25GbB0x
+      - key: ADMIN_IDS
+        value: "5558589142"  # Telegram user ID(s), space-separated
+    plan: free
