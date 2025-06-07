@@ -7,8 +7,8 @@ from datetime import datetime
 
 # Load from environment
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = 123456  # Replace with your API ID
-API_HASH = "your_api_hash"  # Replace with your API HASH
+API_ID = 26862110  # Replace with your API ID
+API_HASH = "b5e8ba215e40f89fa7622c1a9b4d7e56"  # Replace with your API HASH
 ADMIN_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "").split()]
 MEGA_EMAIL = os.getenv("MEGA_EMAIL")
 MEGA_PASSWORD = os.getenv("MEGA_PASSWORD")
