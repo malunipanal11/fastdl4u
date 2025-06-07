@@ -1,187 +1,125 @@
 import os
+import json
 import asyncio
-import random
-from dotenv import load_dotenv
+from pyrogram import Client, filters
 from mega import Mega
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
-)
+from datetime import datetime
 
-load_dotenv()
-
+# Load from environment
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ID = 123456  # Replace with your API ID
+API_HASH = "your_api_hash"  # Replace with your API HASH
+ADMIN_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "").split()]
 MEGA_EMAIL = os.getenv("MEGA_EMAIL")
 MEGA_PASSWORD = os.getenv("MEGA_PASSWORD")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-mega = Mega()
-m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
+bot = Client("storage_bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
+mega = Mega().login(MEGA_EMAIL, MEGA_PASSWORD)
 
-UPLOAD_FOLDER = "TelegramUploads"
-CATEGORIES = {"Images": "img", "Video": "vid", "Audio": "aud"}
+upload_mode = {}
 
-session_files = {}
-serial_counter = {"img": 0, "vid": 0, "aud": 0}
-user_uploading = set()
+# Local serial tracking
+file_count = {"img": 0, "vid": 0, "aud": 0}
 
-async def delete_later(context, message, delay=30):
+def get_serial(file_type):
+    file_count[file_type] += 1
+    return f"{file_type}{file_count[file_type]}"
+
+async def auto_delete_message(msg, delay=30):
     await asyncio.sleep(delay)
-    try:
-        await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
-    except:
-        pass
+    await msg.delete()
 
-async def delete_local_file_later(path, delay=600):
+async def auto_delete_file(msg, delay=600):
     await asyncio.sleep(delay)
-    if os.path.exists(path):
-        os.remove(path)
+    await msg.delete()
 
-def categorize(mime_type):
-    if mime_type.startswith("image"):
-        return "Images", "img"
-    if mime_type.startswith("video"):
-        return "Video", "vid"
-    if mime_type.startswith("audio"):
-        return "Audio", "aud"
-    return "Documents", "doc"
+# Upload handler
+@bot.on_message(filters.command("upload") & filters.user(ADMIN_IDS))
+async def start_upload(client, message):
+    upload_mode[message.from_user.id] = True
+    msg = await message.reply("Upload mode ON. Send files.")
+    await auto_delete_message(msg)
 
-async def start_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    user_uploading.add(update.effective_user.id)
-    msg = await update.message.reply_text("Upload mode activated.")
-    await delete_later(context, msg)
+@bot.on_message(filters.command("done") & filters.user(ADMIN_IDS))
+async def done_upload(client, message):
+    upload_mode.pop(message.from_user.id, None)
+    msg = await message.reply("Upload mode OFF.")
+    await auto_delete_message(msg)
 
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    user_uploading.discard(update.effective_user.id)
-    count = len(session_files.get(update.effective_user.id, []))
-    msg = await update.message.reply_text(f"Upload mode exited. {count} files uploaded.")
-    session_files[update.effective_user.id] = []
-    await delete_later(context, msg)
+@bot.on_message(filters.document | filters.video | filters.audio | filters.photo)
+async def save_and_upload(client, message):
+    if upload_mode.get(message.from_user.id):
+        media_type = None
+        if message.photo:
+            media_type = "img"
+        elif message.video:
+            media_type = "vid"
+        elif message.audio:
+            media_type = "aud"
+        elif message.document:
+            mime = message.document.mime_type or ""
+            if "image" in mime:
+                media_type = "img"
+            elif "video" in mime:
+                media_type = "vid"
+            elif "audio" in mime:
+                media_type = "aud"
 
-async def upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in user_uploading:
-        return
+        if media_type:
+            filename = get_serial(media_type)
+            dl_path = await message.download(file_name=filename)
+            mega.upload(dl_path, f"telegram_upload/{media_type.upper()}S/{filename}")
+            os.remove(dl_path)
 
-    file = update.message.document or update.message.photo[-1] or update.message.video or update.message.audio
-    if not file:
-        return
+            msg = await message.reply(f"✅ Uploaded `{filename}` successfully.")
+            await auto_delete_message(msg)
+        else:
+            msg = await message.reply("❌ Unsupported file type.")
+            await auto_delete_message(msg)
 
-    file_id = file.file_id
-    file_obj = await context.bot.get_file(file_id)
-    file_name = file.file_name if hasattr(file, 'file_name') and file.file_name else f"{file_id}.bin"
-    local_path = f"./downloads/{file_name}"
-    os.makedirs("./downloads", exist_ok=True)
-
-    await file_obj.download_to_drive(local_path)
-
-    mime_type = file.mime_type if hasattr(file, 'mime_type') else "application/octet-stream"
-    category_name, prefix = categorize(mime_type)
-    serial_counter[prefix] += 1
-    serial = f"{prefix}{serial_counter[prefix]}"
-
-    mega_folder = m.find(UPLOAD_FOLDER)
-    if not mega_folder:
-        mega_folder = m.create_folder(UPLOAD_FOLDER)
-    subfolder = m.find(f"{UPLOAD_FOLDER}/{category_name}")
-    if not subfolder:
-        subfolder = m.create_folder(category_name, parent=mega_folder[0])
-
-    uploaded = m.upload(local_path, subfolder[0])
-    link = m.get_upload_link(uploaded)
-
-    user_id = update.effective_user.id
-    if user_id not in session_files:
-        session_files[user_id] = []
-    session_files[user_id].append({"serial": serial, "name": file_name, "link": link})
-
-    msg = await update.message.reply_text(
-        f"✅ Upload successful!\n🔢 ID: {serial}\n📁 Category: {category_name}\n🔗 [Link]({link})",
-        disable_web_page_preview=True
-    )
-    await delete_later(context, msg)
-    asyncio.create_task(delete_local_file_later(local_path))
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    files = session_files.get(update.effective_user.id, [])
-    if not files:
-        msg = await update.message.reply_text("No files uploaded this session.")
+# Show one random file from MEGA
+@bot.on_message(filters.command(["images", "videos", "audio"]))
+async def get_random_file(client, message):
+    category = message.command[0].upper() + "S"
+    folder = mega.find(f"telegram_upload/{category}")
+    if folder:
+        files = mega.get_files_in_node(folder)
+        if files:
+            import random
+            selected = random.choice(list(files.values()))
+            dl_link = mega.get_link(selected)
+            msg = await message.reply(f"📁 Random {category[:-1]}: {dl_link}")
+            await auto_delete_file(msg)
+        else:
+            await message.reply("❌ No files in this category.")
     else:
-        msg = await update.message.reply_text(
-            "🗂 Uploaded Files:\n" +
-            "\n".join([f"{f['serial']} - {f['name']}" for f in files])
-        )
-    await delete_later(context, msg)
+        await message.reply("❌ Category folder not found.")
 
-async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+@bot.on_message(filters.command("link") & filters.user(ADMIN_IDS))
+async def link_file(client, message):
+    args = message.text.split()
+    if len(args) != 2:
+        await message.reply("Usage: /link img1 or /link vid2")
         return
-    info = m.get_quota()
-    msg = await update.message.reply_text(
-        f"📦 MEGA Storage Used: {info['used'] / 1e9:.2f} GB / {info['total'] / 1e9:.2f} GB"
-    )
-    await delete_later(context, msg)
 
-async def link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if not context.args:
-        return
-    target_serial = context.args[0].strip()
-    files = session_files.get(update.effective_user.id, [])
-    for f in files:
-        if f['serial'] == target_serial:
-            msg = await update.message.reply_text(f"{f['serial']} - {f['name']}\n🔗 {f['link']}")
-            await delete_later(context, msg)
+    serial = args[1]
+    ftype = serial[:3]
+    folder = mega.find(f"telegram_upload/{ftype.upper()}S")
+    files = mega.get_files_in_node(folder)
+    for file_id, file_data in files.items():
+        if file_data['a']['n'] == serial:
+            url = mega.get_link(file_data)
+            await message.reply(f"🔗 Link for `{serial}`:\n{url}")
             return
-    msg = await update.message.reply_text("❌ Serial not found.")
-    await delete_later(context, msg)
 
-async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE, cat: str):
-    mega_folder = m.find(f"{UPLOAD_FOLDER}/{cat}")
-    if not mega_folder:
-        msg = await update.message.reply_text(f"No files found in {cat}.")
-        await delete_later(context, msg)
-        return
-    files = m.get_files_in_node(mega_folder[0])
-    if not files:
-        msg = await update.message.reply_text(f"No files found in {cat}.")
-        await delete_later(context, msg)
-        return
-    chosen = random.choice(files)
-    name = chosen['name']
-    link = m.get_link(chosen)
-    prefix = CATEGORIES[cat]
-    msg = await update.message.reply_text(
-        f"🎲 Random {cat[:-1]}:\n📄 {name}\n🔗 {link}",
-        disable_web_page_preview=True
-    )
-    await delete_later(context, msg)
+    await message.reply("❌ File not found.")
 
-async def images(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await random_file(update, context, "Images")
+@bot.on_message(filters.command("status"))
+async def status(client, message):
+    await message.reply("✅ Bot is online.")
 
-async def videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await random_file(update, context, "Video")
+@bot.on_message(filters.command("info"))
+async def info(client, message):
+    await message.reply("📦 Telegram → MEGA storage bot\nMade with ❤️")
 
-async def audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await random_file(update, context, "Audio")
-
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("upload", start_upload))
-    app.add_handler(CommandHandler("done", done))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("info", info))
-    app.add_handler(CommandHandler("link", link))
-    app.add_handler(CommandHandler("images", images))
-    app.add_handler(CommandHandler("videos", videos))
-    app.add_handler(CommandHandler("audio", audio))
-    app.add_handler(MessageHandler(filters.ALL, upload_handler))
-    app.run_polling()
+bot.run()
