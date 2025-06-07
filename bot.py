@@ -1,109 +1,187 @@
 import os
-import logging
-from fastapi import FastAPI, Request
-from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-from yt_dlp import YoutubeDL
-import httpx
+import asyncio
+import random
 from dotenv import load_dotenv
+from mega import Mega
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
+)
 
 load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_DOMAIN")
-GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MEGA_EMAIL = os.getenv("MEGA_EMAIL")
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("bot")
+mega = Mega()
+m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
 
-app = FastAPI()
-application: Application = Application.builder().token(TOKEN).build()
+UPLOAD_FOLDER = "TelegramUploads"
+CATEGORIES = {"Images": "img", "Video": "vid", "Audio": "aud"}
 
-# -- Downloader function --
+session_files = {}
+serial_counter = {"img": 0, "vid": 0, "aud": 0}
+user_uploading = set()
 
-async def download_video(url: str, filename: str = "/tmp/video.mp4") -> bytes:
+async def delete_later(context, message, delay=30):
+    await asyncio.sleep(delay)
     try:
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': filename,
-            'quiet': True,
-            'noplaylist': True,
-            'merge_output_format': 'mp4',
-            'geo_bypass': True,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0'
-            }
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        with open(filename, 'rb') as f:
-            return f.read()
-    except Exception as e:
-        logger.error(f"yt-dlp download failed: {e}")
-        raise
+        await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
+    except:
+        pass
 
-# -- Gofile uploader --
+async def delete_local_file_later(path, delay=600):
+    await asyncio.sleep(delay)
+    if os.path.exists(path):
+        os.remove(path)
 
-async def upload_to_gofile(file_bytes: bytes, filename: str) -> str:
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            server_resp = await client.get("https://api.gofile.io/getServer")
-            server_data = server_resp.json()
-            server = server_data["data"]["server"]
+def categorize(mime_type):
+    if mime_type.startswith("image"):
+        return "Images", "img"
+    if mime_type.startswith("video"):
+        return "Video", "vid"
+    if mime_type.startswith("audio"):
+        return "Audio", "aud"
+    return "Documents", "doc"
 
-            files = {"file": (filename, file_bytes)}
-            params = {"token": GOFILE_TOKEN}
+async def start_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    user_uploading.add(update.effective_user.id)
+    msg = await update.message.reply_text("Upload mode activated.")
+    await delete_later(context, msg)
 
-            upload_url = f"https://{server}.gofile.io/uploadFile"
-            upload_resp = await client.post(upload_url, files=files, params=params)
-            upload_data = upload_resp.json()
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    user_uploading.discard(update.effective_user.id)
+    count = len(session_files.get(update.effective_user.id, []))
+    msg = await update.message.reply_text(f"Upload mode exited. {count} files uploaded.")
+    session_files[update.effective_user.id] = []
+    await delete_later(context, msg)
 
-            return upload_data["data"]["downloadPage"]
-    except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise
-
-# -- Command Handlers --
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Send a video link (YouTube, Instagram, TikTok, etc.), and I'll give you a download link."
-    )
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.startswith("http"):
+async def upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in user_uploading:
         return
 
-    await update.message.reply_text("⏳ Downloading...")
-    try:
-        video_bytes = await download_video(text)
-        url = await upload_to_gofile(video_bytes, "video.mp4")
-        await update.message.reply_text(f"✅ [Download here]({url})", parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error handling message: {e}")
-        await update.message.reply_text("❌ Failed to download video.")
+    file = update.message.document or update.message.photo[-1] or update.message.video or update.message.audio
+    if not file:
+        return
 
-# -- Register Handlers --
+    file_id = file.file_id
+    file_obj = await context.bot.get_file(file_id)
+    file_name = file.file_name if hasattr(file, 'file_name') and file.file_name else f"{file_id}.bin"
+    local_path = f"./downloads/{file_name}"
+    os.makedirs("./downloads", exist_ok=True)
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    await file_obj.download_to_drive(local_path)
 
-# -- FastAPI Routes --
+    mime_type = file.mime_type if hasattr(file, 'mime_type') else "application/octet-stream"
+    category_name, prefix = categorize(mime_type)
+    serial_counter[prefix] += 1
+    serial = f"{prefix}{serial_counter[prefix]}"
 
-@app.on_event("startup")
-async def on_startup():
-    await application.initialize()
-    await application.bot.set_webhook(WEBHOOK_URL)
-    await application.bot.set_my_commands([BotCommand("start", "Start the bot")])
-    logger.info("✅ Webhook registered.")
+    mega_folder = m.find(UPLOAD_FOLDER)
+    if not mega_folder:
+        mega_folder = m.create_folder(UPLOAD_FOLDER)
+    subfolder = m.find(f"{UPLOAD_FOLDER}/{category_name}")
+    if not subfolder:
+        subfolder = m.create_folder(category_name, parent=mega_folder[0])
 
-@app.post("/")
-async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
-    return {"status": "ok"}
+    uploaded = m.upload(local_path, subfolder[0])
+    link = m.get_upload_link(uploaded)
 
-@app.get("/")
-async def root():
-    return {"message": "Bot is running"}
+    user_id = update.effective_user.id
+    if user_id not in session_files:
+        session_files[user_id] = []
+    session_files[user_id].append({"serial": serial, "name": file_name, "link": link})
+
+    msg = await update.message.reply_text(
+        f"✅ Upload successful!\n🔢 ID: {serial}\n📁 Category: {category_name}\n🔗 [Link]({link})",
+        disable_web_page_preview=True
+    )
+    await delete_later(context, msg)
+    asyncio.create_task(delete_local_file_later(local_path))
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    files = session_files.get(update.effective_user.id, [])
+    if not files:
+        msg = await update.message.reply_text("No files uploaded this session.")
+    else:
+        msg = await update.message.reply_text(
+            "🗂 Uploaded Files:\n" +
+            "\n".join([f"{f['serial']} - {f['name']}" for f in files])
+        )
+    await delete_later(context, msg)
+
+async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    info = m.get_quota()
+    msg = await update.message.reply_text(
+        f"📦 MEGA Storage Used: {info['used'] / 1e9:.2f} GB / {info['total'] / 1e9:.2f} GB"
+    )
+    await delete_later(context, msg)
+
+async def link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        return
+    target_serial = context.args[0].strip()
+    files = session_files.get(update.effective_user.id, [])
+    for f in files:
+        if f['serial'] == target_serial:
+            msg = await update.message.reply_text(f"{f['serial']} - {f['name']}\n🔗 {f['link']}")
+            await delete_later(context, msg)
+            return
+    msg = await update.message.reply_text("❌ Serial not found.")
+    await delete_later(context, msg)
+
+async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE, cat: str):
+    mega_folder = m.find(f"{UPLOAD_FOLDER}/{cat}")
+    if not mega_folder:
+        msg = await update.message.reply_text(f"No files found in {cat}.")
+        await delete_later(context, msg)
+        return
+    files = m.get_files_in_node(mega_folder[0])
+    if not files:
+        msg = await update.message.reply_text(f"No files found in {cat}.")
+        await delete_later(context, msg)
+        return
+    chosen = random.choice(files)
+    name = chosen['name']
+    link = m.get_link(chosen)
+    prefix = CATEGORIES[cat]
+    msg = await update.message.reply_text(
+        f"🎲 Random {cat[:-1]}:\n📄 {name}\n🔗 {link}",
+        disable_web_page_preview=True
+    )
+    await delete_later(context, msg)
+
+async def images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await random_file(update, context, "Images")
+
+async def videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await random_file(update, context, "Video")
+
+async def audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await random_file(update, context, "Audio")
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("upload", start_upload))
+    app.add_handler(CommandHandler("done", done))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("info", info))
+    app.add_handler(CommandHandler("link", link))
+    app.add_handler(CommandHandler("images", images))
+    app.add_handler(CommandHandler("videos", videos))
+    app.add_handler(CommandHandler("audio", audio))
+    app.add_handler(MessageHandler(filters.ALL, upload_handler))
+    app.run_polling()
