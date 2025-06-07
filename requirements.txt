@@ -1,6 +1,3 @@
-fastapi
+python-telegram-bot==20.3
 python-dotenv
-httpx
-yt-dlp
-python-telegram-bot==20.6
-uvicorn
+mega.py
