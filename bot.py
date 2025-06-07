@@ -1,188 +1,147 @@
 import os
-import asyncio
 import logging
-import random
-from telegram import Update, InputFile
+import asyncio
+from telegram import Update, ChatAction
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from mega import Mega
+from threading import Timer
 
-logging.basicConfig(level=logging.INFO)
-
-# Get from environment
+# --- Config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MEGA_EMAIL = os.getenv("MEGA_EMAIL")
 MEGA_PASSWORD = os.getenv("MEGA_PASSWORD")
-ADMIN_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "").split()]
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split()))
+STORAGE_FOLDER = "TelegramUploads"
 
-# Global flags
+# --- Setup ---
+logging.basicConfig(level=logging.INFO)
+mega = Mega()
+m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
+
 upload_mode = {}
-serial = {"img": 0, "vid": 0, "aud": 0}
-mega = Mega().login(MEGA_EMAIL, MEGA_PASSWORD)
+file_counters = {"image": 0, "video": 0, "audio": 0}
+file_db = {"image": [], "video": [], "audio": []}
 
-
-def get_serial(type_key):
-    serial[type_key] += 1
-    return f"{type_key}{serial[type_key]}"
-
-
-async def delete_later(ctx: CallbackContext, chat_id: int, msg_id: int, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        ctx.bot.delete_message(chat_id, msg_id)
-    except Exception:
-        pass
-
+# --- Core Commands ---
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+def upload_to_mega(file_path, file_type):
+    folder = f"{STORAGE_FOLDER}/{file_type}"
+    try:
+        m.find(folder)
+    except:
+        m.create_folder(folder)
+    m.upload(file_path, m.find(folder)[0])
+    os.remove(file_path)
 
-# ───────────────────────────── Admin Commands ─────────────────────────────
-
-def upload_cmd(update: Update, context: CallbackContext):
-    user = update.effective_user
-    if not is_admin(user.id):
-        return
-    upload_mode[user.id] = True
-    msg = update.message.reply_text("✅ Upload mode ON. Send files.")
-    context.job_queue.run_once(lambda ctx: asyncio.create_task(delete_later(ctx, msg.chat.id, msg.message_id, 30)), 0)
-
-
-def done_cmd(update: Update, context: CallbackContext):
-    user = update.effective_user
-    if user.id in upload_mode:
-        upload_mode.pop(user.id)
-    msg = update.message.reply_text("✅ Upload mode OFF.")
-    context.job_queue.run_once(lambda ctx: asyncio.create_task(delete_later(ctx, msg.chat.id, msg.message_id, 30)), 0)
-
-
-def status_cmd(update: Update, context: CallbackContext):
-    update.message.reply_text("✅ Bot is alive.")
-
-
-def info_cmd(update: Update, context: CallbackContext):
-    update.message.reply_text("🤖 Mega Storage Bot\nSupports MEGA uploads, Telegram commands, and file organization.")
-
-
-def link_cmd(update: Update, context: CallbackContext):
+def start_upload(update: Update, context: CallbackContext):
     if not is_admin(update.effective_user.id):
         return
+    upload_mode[update.effective_user.id] = True
+    update.message.reply_text("Upload mode ON. Send files...")
 
-    args = context.args
-    if not args or not args[0]:
-        update.message.reply_text("Usage: /link img1 or /link vid2")
+def stop_upload(update: Update, context: CallbackContext):
+    if not is_admin(update.effective_user.id):
+        return
+    upload_mode[update.effective_user.id] = False
+    update.message.reply_text("Upload mode OFF.")
+
+def handle_file(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    if not upload_mode.get(user_id, False):
         return
 
-    key = args[0]
-    type_map = {"img": "IMAGES", "vid": "VIDEOS", "aud": "AUDIO"}
-    prefix = key[:3]
-
-    if prefix not in type_map:
-        update.message.reply_text("❌ Invalid file ID.")
-        return
-
-    folder = mega.find(f"telegram_upload/{type_map[prefix]}")
-    files = mega.get_files_in_node(folder)
-    for f in files.values():
-        if f['a']['n'] == key:
-            link = mega.get_link(f)
-            update.message.reply_text(f"🔗 Link for `{key}`:\n{link}")
-            return
-
-    update.message.reply_text("❌ File not found.")
-
-
-# ───────────────────────────── File Handling ─────────────────────────────
-
-def handle_upload(update: Update, context: CallbackContext):
-    user = update.effective_user
-    if not upload_mode.get(user.id):
-        return
-
-    file = update.message.document or update.message.video or update.message.audio or update.message.photo
+    file = None
     file_type = None
-    file_obj = None
 
     if update.message.photo:
-        file_type = "img"
-        file_obj = update.message.photo[-1].get_file()
+        file = update.message.photo[-1].get_file()
+        file_type = "image"
     elif update.message.video:
-        file_type = "vid"
-        file_obj = update.message.video.get_file()
+        file = update.message.video.get_file()
+        file_type = "video"
     elif update.message.audio:
-        file_type = "aud"
-        file_obj = update.message.audio.get_file()
-    elif update.message.document:
-        mime = update.message.document.mime_type or ""
-        if "image" in mime:
-            file_type = "img"
-        elif "video" in mime:
-            file_type = "vid"
-        elif "audio" in mime:
-            file_type = "aud"
-        file_obj = update.message.document.get_file()
+        file = update.message.audio.get_file()
+        file_type = "audio"
 
-    if not file_type or not file_obj:
-        msg = update.message.reply_text("❌ Unsupported file type.")
-        context.job_queue.run_once(lambda ctx: asyncio.create_task(delete_later(ctx, msg.chat.id, msg.message_id, 30)), 0)
+    if not file_type:
+        update.message.reply_text("Only images, videos, or audio allowed.")
         return
 
-    filename = get_serial(file_type)
-    local_path = f"{filename}"
-    file_obj.download(local_path)
+    file_counters[file_type] += 1
+    serial = f"{file_type[:3]}{file_counters[file_type]}"
+    filename = f"{serial}_{file.file_id}.bin"
+    file_path = f"/tmp/{filename}"
 
-    mega.upload(local_path, f"telegram_upload/{file_type.upper()}S/{filename}")
-    os.remove(local_path)
+    file.download(file_path)
+    upload_to_mega(file_path, file_type)
+    file_db[file_type].append((serial, file.file_id))
 
-    msg = update.message.reply_text(f"✅ Uploaded as `{filename}`")
-    context.job_queue.run_once(lambda ctx: asyncio.create_task(delete_later(ctx, msg.chat.id, msg.message_id, 30)), 0)
-    context.job_queue.run_once(lambda ctx: asyncio.create_task(delete_later(ctx, update.message.chat.id, update.message.message_id, 600)), 0)
+    sent_msg = update.message.reply_text(f"✅ Uploaded: {serial}")
+    context.job_queue.run_once(lambda c: sent_msg.delete(), 30)
 
-
-# ───────────────────────────── Category Browsing ─────────────────────────────
-
-def show_random(update: Update, context: CallbackContext):
-    category = update.message.text.lower().replace("/", "").upper()
-    folder = mega.find(f"telegram_upload/{category}")
-    if not folder:
-        update.message.reply_text("❌ Folder not found.")
+def get_random(update: Update, context: CallbackContext, cat):
+    if not file_db[cat]:
+        update.message.reply_text("❌ No files yet.")
         return
+    import random
+    serial, file_id = random.choice(file_db[cat])
+    context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_DOCUMENT)
+    msg = context.bot.send_document(chat_id=update.effective_chat.id, document=file_id)
+    context.job_queue.run_once(lambda c: msg.delete(), 600)
 
-    files = mega.get_files_in_node(folder)
-    if not files:
-        update.message.reply_text("❌ No files available.")
+def show_image(update: Update, context: CallbackContext):
+    get_random(update, context, "image")
+
+def show_video(update: Update, context: CallbackContext):
+    get_random(update, context, "video")
+
+def show_audio(update: Update, context: CallbackContext):
+    get_random(update, context, "audio")
+
+def status(update: Update, context: CallbackContext):
+    text = "\n".join(f"{k.capitalize()}s: {len(v)}" for k, v in file_db.items())
+    update.message.reply_text(f"📊 Status:\n{text}")
+
+def info(update: Update, context: CallbackContext):
+    update.message.reply_text("🤖 Mega Upload Bot\nFiles auto-categorized & stored safely.")
+
+def link(update: Update, context: CallbackContext):
+    if not is_admin(update.effective_user.id):
         return
+    args = context.args
+    if not args:
+        update.message.reply_text("Usage: /link <serial>")
+        return
+    for cat in file_db:
+        for serial, file_id in file_db[cat]:
+            if serial == args[0]:
+                update.message.reply_text(f"Telegram file ID: `{file_id}`", parse_mode="Markdown")
+                return
+    update.message.reply_text("❌ Serial not found.")
 
-    chosen = random.choice(list(files.values()))
-    link = mega.get_link(chosen)
-    msg = update.message.reply_text(f"🎲 Random {category.title()}: {link}")
-    context.job_queue.run_once(lambda ctx: asyncio.create_task(delete_later(ctx, msg.chat.id, msg.message_id, 600)), 0)
-
-
-# ───────────────────────────── Main ─────────────────────────────
+# --- Main ---
 
 def main():
-    updater = Updater(token=BOT_TOKEN, use_context=True)
+    updater = Updater(BOT_TOKEN)
     dp = updater.dispatcher
 
-    # Admin
-    dp.add_handler(CommandHandler("upload", upload_cmd))
-    dp.add_handler(CommandHandler("done", done_cmd))
-    dp.add_handler(CommandHandler("link", link_cmd, pass_args=True))
-    dp.add_handler(CommandHandler("status", status_cmd))
-    dp.add_handler(CommandHandler("info", info_cmd))
+    dp.add_handler(CommandHandler("upload", start_upload))
+    dp.add_handler(CommandHandler("done", stop_upload))
+    dp.add_handler(CommandHandler("status", status))
+    dp.add_handler(CommandHandler("info", info))
+    dp.add_handler(CommandHandler("link", link, pass_args=True))
 
-    # User
-    dp.add_handler(CommandHandler("images", show_random))
-    dp.add_handler(CommandHandler("videos", show_random))
-    dp.add_handler(CommandHandler("audio", show_random))
+    dp.add_handler(CommandHandler("images", show_image))
+    dp.add_handler(CommandHandler("videos", show_video))
+    dp.add_handler(CommandHandler("audio", show_audio))
 
-    # Files
-    dp.add_handler(MessageHandler(Filters.document | Filters.photo | Filters.video | Filters.audio, handle_upload))
+    dp.add_handler(MessageHandler(Filters.document | Filters.photo | Filters.video | Filters.audio, handle_file))
 
     updater.start_polling()
     updater.idle()
-
 
 if __name__ == "__main__":
     main()
