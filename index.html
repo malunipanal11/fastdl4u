@@ -1,59 +1,26 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Video Downloader</title>
-    <meta charset="UTF-8">
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 700px;
-            margin: 2rem auto;
-            padding: 1rem;
-            background-color: #f4f4f4;
-        }
-        h1 {
-            text-align: center;
-        }
-        form {
-            display: flex;
-            margin-bottom: 2rem;
-        }
-        input[type="text"] {
-            flex: 1;
-            padding: 0.5rem;
-            font-size: 1rem;
-        }
-        button {
-            padding: 0.5rem 1rem;
-            font-size: 1rem;
-            margin-left: 0.5rem;
-        }
-        .video-item {
-            background: white;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            border-radius: 8px;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Fast Downloader</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-    <h1>Video Downloader</h1>
+  <h1>🎥 Fast Video Downloader</h1>
+  <form action="/download" method="post">
+    <input type="text" name="link" placeholder="Enter video URL" required>
+    <button type="submit">Download</button>
+  </form>
 
-    <form method="post" action="/download">
-        <input type="text" name="link" placeholder="Enter video URL" required>
-        <button type="submit">Download</button>
-    </form>
-
-    <h2>Downloaded Videos</h2>
+  <h2>📁 Downloaded Videos</h2>
+  <ul>
     {% for video in videos %}
-        <div class="video-item">
-            <strong>{{ video.get("title", "No Title") }}</strong><br>
-            {% if video.get("filepath") %}
-                <a href="{{ video.filepath }}" target="_blank">Watch</a>
-            {% endif %}
-        </div>
+      <li>
+        <a href="{{ video.url }}" target="_blank">{{ video.title }}</a>
+      </li>
     {% else %}
-        <p>No videos downloaded yet.</p>
+      <li>No videos downloaded yet.</li>
     {% endfor %}
+  </ul>
 </body>
 </html>
