@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from downloader import download_all_assets
 import os, json
+import os
+os.makedirs("static/videos", exist_ok=True)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
