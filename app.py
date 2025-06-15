@@ -1,15 +1,15 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from downloader import download_all_assets
 import os, json
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="backend/static"), name="static")
-templates = Jinja2Templates(directory="backend/templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory=".")
 
-VIDEO_DB = "backend/static/videos/metadata.json"
+VIDEO_DB = "static/videos/metadata.json"
 
 def load_videos():
     if os.path.exists(VIDEO_DB):
