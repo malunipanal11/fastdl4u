@@ -6,25 +6,25 @@ from downloader import download_all_assets
 from telegram_bot import telegram_webhook
 import os, json
 
-# Ensure videos folder and metadata file exist
+# Ensure folders exist
 os.makedirs("static/videos", exist_ok=True)
-VIDEO_DB = "static/videos/metadata.json"
-if not os.path.exists(VIDEO_DB):
-    with open(VIDEO_DB, 'w') as f:
-        json.dump([], f)
 
 app = FastAPI()
 
-# Static files and templates setup
+# Static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory=".")
 
+VIDEO_DB = "static/videos/metadata.json"
+
 def load_videos():
     try:
-        with open(VIDEO_DB, 'r') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        return []
+        if os.path.exists(VIDEO_DB):
+            with open(VIDEO_DB, 'r') as f:
+                return json.load(f)
+    except json.JSONDecodeError:
+        print("⚠️ Failed to load metadata: JSON is invalid")
+    return []
 
 def save_video(info):
     data = load_videos()
@@ -40,8 +40,11 @@ async def index(request: Request):
 @app.post("/download")
 async def download_link(link: str = Form(...)):
     meta = download_all_assets(link)
-    save_video(meta)
-    return {"status": "ok", "meta": meta}
+    if meta:
+        save_video(meta)
+        return {"status": "ok", "meta": meta}
+    else:
+        return {"status": "error", "message": "Download failed"}
 
 @app.post("/webhook")
 async def handle_telegram_webhook(request: Request):
