@@ -6,20 +6,26 @@ from downloader import download_all_assets
 from telegram_bot import telegram_webhook
 import os, json
 
-# Ensure video folder exists
+# Ensure video folder and DB exist
 os.makedirs("static/videos", exist_ok=True)
+VIDEO_DB = "static/videos/metadata.json"
+
+# Create empty metadata.json if missing or invalid
+if not os.path.exists(VIDEO_DB) or os.path.getsize(VIDEO_DB) == 0:
+    with open(VIDEO_DB, 'w') as f:
+        json.dump([], f)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory=".")
 
-VIDEO_DB = "static/videos/metadata.json"
-
 def load_videos():
-    if os.path.exists(VIDEO_DB):
+    try:
         with open(VIDEO_DB, 'r') as f:
             return json.load(f)
-    return []
+    except Exception as e:
+        print(f"Failed to load metadata: {e}")
+        return []
 
 def save_video(info):
     data = load_videos()
