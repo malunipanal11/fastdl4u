@@ -1,43 +1,27 @@
-from yt_dlp import YoutubeDL
+import yt_dlp
 import os
 
-def download_all_assets(url: str, output_dir='static/videos'):
-    os.makedirs(output_dir, exist_ok=True)
+DOWNLOAD_DIR = "static/videos"
 
+def sanitize_filename(name):
+    return "".join(c for c in name if c.isalnum() or c in " ._-").rstrip()
+
+def download_all_assets(url: str) -> dict:
     ydl_opts = {
-        'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
-        'writethumbnail': True,
-        'writeinfojson': True,
+        'format': 'best',
+        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
+        'noplaylist': True,
         'quiet': True,
-        'merge_output_format': 'mp4',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-        }],
+        'no_warnings': True,
     }
 
-    full_download_opts = {
-        **ydl_opts,
-        'format': 'bestvideo[height>=1080]+bestaudio/best',
-    }
-
-    with YoutubeDL(full_download_opts) as ydl:
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        video_file = ydl.prepare_filename(info)
-        audio_file = video_file.rsplit('.', 1)[0] + '.mp3'
-        thumbnail_url = info.get('thumbnail', '')
-        thumbnail_name = thumbnail_url.split("/")[-1]
-        thumbnail_file = os.path.join(output_dir, thumbnail_name)
-
-        metadata = {
-            'title': info.get('title'),
-            'duration': info.get('duration'),
-            'size': info.get('filesize_approx', 0),
-            'quality': info.get('format'),
-            'platform': info.get('extractor_key'),
-            'video_file': video_file,
-            'audio_file': audio_file,
-            'thumbnail': f"/static/videos/{thumbnail_name}"
+        title = info.get("title", "video")
+        ext = info.get("ext", "mp4")
+        filename = sanitize_filename(f"{title}.{ext}")
+        filepath = os.path.join(DOWNLOAD_DIR, filename)
+        return {
+            "title": title,
+            "filepath": f"/static/videos/{filename}"
         }
-
-        return metadata
