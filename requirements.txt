@@ -5,3 +5,4 @@ aiofiles
 python-telegram-bot==20.7
 yt_dlp
 requests
+python-multipart
