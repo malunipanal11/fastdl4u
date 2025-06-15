@@ -1,27 +1,27 @@
 import yt_dlp
 import os
+import uuid
 
 DOWNLOAD_DIR = "static/videos"
 
-def sanitize_filename(name):
-    return "".join(c for c in name if c.isalnum() or c in " ._-").rstrip()
+def download_all_assets(url: str):
+    video_id = str(uuid.uuid4())[:8]
+    output_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s")
 
-def download_all_assets(url: str) -> dict:
     ydl_opts = {
-        'format': 'best',
-        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-        'noplaylist': True,
+        'outtmpl': output_path,
+        'format': 'bestvideo+bestaudio/best',
+        'merge_output_format': 'mp4',
         'quiet': True,
-        'no_warnings': True,
+        'noplaylist': True
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        title = info.get("title", "video")
-        ext = info.get("ext", "mp4")
-        filename = sanitize_filename(f"{title}.{ext}")
-        filepath = os.path.join(DOWNLOAD_DIR, filename)
+        filename = ydl.prepare_filename(info)
+        base_filename = os.path.basename(filename).rsplit('.', 1)[0] + ".mp4"
+
         return {
-            "title": title,
-            "filepath": f"/static/videos/{filename}"
+            "title": info.get("title", "Unknown Title"),
+            "url": f"/static/videos/{base_filename}"
         }
