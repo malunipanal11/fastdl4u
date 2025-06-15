@@ -5,23 +5,8 @@ from downloader import download_all_assets
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+SERVER_BASE_URL = os.getenv("SERVER_URL", "https://fastdl4u.onrender.com")  # Replace with your URL if needed
 
-# Helpers
-def send_message(chat_id, text):
-    requests.post(f"{TELEGRAM_API}/sendMessage", json={
-        "chat_id": chat_id,
-        "text": text
-    })
-
-def send_video(chat_id, video_path, caption="Here's your video 🎥"):
-    with open(video_path, "rb") as video_file:
-        requests.post(
-            f"{TELEGRAM_API}/sendVideo",
-            data={"chat_id": chat_id, "caption": caption},
-            files={"video": video_file}
-        )
-
-# Main Webhook
 async def telegram_webhook(request: Request):
     data = await request.json()
     print("Received Telegram update:", data)
@@ -30,31 +15,50 @@ async def telegram_webhook(request: Request):
     chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "")
 
-    if not chat_id:
-        return {"ok": False}
+    if not chat_id or not text:
+        return {"ok": True}
 
-    if text.startswith("/start"):
+    if text == "/start":
         send_message(chat_id, "👋 Hi! I'm alive and ready to download. Just send me a video link.")
-        return {"ok": True}
-
-    if any(site in text for site in ["instagram.com", "youtube.com", "tiktok.com", "facebook.com"]):
+    elif "http" in text:
         send_message(chat_id, "⏬ Downloading your video in ultra HD...")
-        try:
-            meta = download_all_assets(text)
-            video_path = meta["path"]
+        meta = download_all_assets(text)
 
-            file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-
-            if file_size_mb <= 50:
-                send_video(chat_id, video_path, caption=f"✅ {meta['title']}")
-            else:
-                full_url = f"https://fastdl4u.onrender.com{meta['url']}"
-                send_message(chat_id, f"📁 Your video is too large to send here.\n🔗 Download it from: {full_url}")
-
-        except Exception as e:
-            print("Download failed:", e)
+        if meta is None:
             send_message(chat_id, "❌ Failed to download video. Please check the link.")
-        return {"ok": True}
+        else:
+            file_path = meta["path"]
+            file_size = os.path.getsize(file_path)
 
-    send_message(chat_id, "❓ I didn't understand that. Send a valid video link or /start.")
+            if file_size < 45 * 1024 * 1024:
+                send_video_file(chat_id, file_path, caption=f"✅ {meta['title']}")
+            else:
+                video_url = f"{SERVER_BASE_URL}{meta['url']}"
+                send_message(chat_id, f"✅ {meta['title']}\n📎 [Download Link]({video_url})", parse_mode="Markdown")
+    else:
+        send_message(chat_id, "❓ I didn't understand that. Send me a video link or type /start.")
+
     return {"ok": True}
+
+def send_message(chat_id, text, parse_mode=None):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload)
+
+def send_video_file(chat_id, file_path, caption=""):
+    with open(file_path, "rb") as video:
+        requests.post(
+            f"{TELEGRAM_API}/sendVideo",
+            data={
+                "chat_id": chat_id,
+                "caption": caption
+            },
+            files={
+                "video": video
+            }
+        )
