@@ -1,5 +1,6 @@
 fastapi
 uvicorn
 jinja2
-python-multipart
-requests
+aiofiles
+python-telegram-bot==20.7
+yt_dlp
