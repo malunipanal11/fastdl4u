@@ -1,22 +1,28 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
-from downloader import download_all_assets
+from fastapi import Request
+import requests
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PASTE_YOUR_BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    meta = download_all_assets(url)
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    print("Received Telegram update:", data)
 
-    caption = f"🎬 *{meta['title']}*\\n🕒 {meta['duration']}s | 📦 {(meta['size']/1_000_000):.2f} MB\\n📺 {meta['quality']} | 🌐 {meta['platform']}"
-    
-    await update.message.reply_photo(photo=open(meta['thumbnail'][1:], 'rb'), caption=caption, parse_mode="Markdown")
-    await update.message.reply_video(video=open(meta['video_file'], 'rb'), caption="📹 Ultra HD Video")
-    await update.message.reply_audio(audio=open(meta['audio_file'], 'rb'), caption="🎵 High-Res Audio")
+    message = data.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    text = message.get("text", "")
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle))
+    if chat_id:
+        if text == "/start":
+            send_message(chat_id, "👋 Hi! I'm alive and ready to download.")
+        else:
+            send_message(chat_id, "I didn't understand that. Send /start to begin.")
 
-if __name__ == "__main__":
-    app.run_polling()
+    return {"ok": True}
+
+def send_message(chat_id, text):
+    requests.post(f"{TELEGRAM_API}/sendMessage", json={
+        "chat_id": chat_id,
+        "text": text
+    })
