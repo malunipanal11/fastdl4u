@@ -1,7 +1,7 @@
 from yt_dlp import YoutubeDL
 import os
 
-def download_all_assets(url: str, output_dir='backend/static/videos'):
+def download_all_assets(url: str, output_dir='static/videos'):
     os.makedirs(output_dir, exist_ok=True)
 
     ydl_opts = {
@@ -35,8 +35,8 @@ def download_all_assets(url: str, output_dir='backend/static/videos'):
             'size': info.get('filesize_approx', 0),
             'quality': info.get('format'),
             'platform': info.get('extractor_key'),
-            'video_file': video_file.replace('backend/', ''),
-            'audio_file': audio_file.replace('backend/', ''),
+            'video_file': video_file,
+            'audio_file': audio_file,
             'thumbnail': f"/static/videos/{thumbnail_name}"
         }
 
