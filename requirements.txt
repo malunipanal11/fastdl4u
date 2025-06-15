@@ -3,6 +3,6 @@ uvicorn
 jinja2
 aiofiles
 python-telegram-bot==20.7
-yt_dlp
+yt-dlp>=2024.04.09
 requests
 python-multipart
