@@ -1,45 +1,37 @@
-from pydrive2.auth import GoogleAuth
-from pydrive2.drive import GoogleDrive
 import os
 import json
+import random
+from pydrive2.auth import GoogleAuth
+from pydrive2.drive import GoogleDrive
 
-# Load service account JSON
-SERVICE_ACCOUNT_FILE = "service_account.json"
+# Load credentials from environment variable
+service_account_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
 
 gauth = GoogleAuth()
-gauth.LoadServiceConfigSettings()
-gauth.ServiceAuth()  # Assumes service_account.json is in root
+gauth.settings['client_config_backend'] = 'service'
+gauth.settings['service_config'] = {
+    "client_service_email": service_account_info["client_email"],
+    "client_user_email": service_account_info["client_email"],
+    "private_key_file": None,
+    "private_key": service_account_info["private_key"],
+    "client_id": service_account_info["client_id"],
+    "client_secret": "unused"
+}
 
+gauth.ServiceAuth()
 drive = GoogleDrive(gauth)
 
-def upload_to_drive(local_file, drive_file_name, folder_name=None):
-    file = drive.CreateFile({'title': drive_file_name})
-    if folder_name:
-        folder_id = get_folder_id(folder_name)
-        if folder_id:
-            file['parents'] = [{'id': folder_id}]
-    file.SetContentFile(local_file)
+def upload_to_drive(filename: str, content: str) -> str:
+    """Uploads content to Google Drive with a given filename and returns file ID."""
+    file = drive.CreateFile({'title': filename})
+    file.SetContentString(content)
     file.Upload()
     return file['id']
 
-def get_folder_id(folder_name):
-    file_list = drive.ListFile({
-        'q': f"title='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    }).GetList()
-    if file_list:
-        return file_list[0]['id']
-    return None
-
-def list_files_in_folder(folder_name):
-    folder_id = get_folder_id(folder_name)
-    if not folder_id:
-        return []
-    file_list = drive.ListFile({
-        'q': f"'{folder_id}' in parents and trashed=false"
-    }).GetList()
-    return [{'title': f['title'], 'id': f['id']} for f in file_list]
-
-def get_random_file(folder_name):
-    import random
-    files = list_files_in_folder(folder_name)
-    return random.choice(files) if files else None
+def get_random_file() -> str:
+    """Returns the title of a random file from Google Drive."""
+    file_list = drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
+    if not file_list:
+        return "No files found."
+    file = random.choice(file_list)
+    return f"{file['title']} (ID: {file['id']})"
