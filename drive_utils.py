@@ -1,66 +1,76 @@
 import os
-import io
 import json
+import base64
 import random
-from pydrive2.auth import GoogleAuth
-from pydrive2.drive import GoogleDrive
-from pydrive2.settings import InvalidConfigError
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
-# Load credentials from Render environment variable
-credentials_json = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+# Decode the service account credentials from base64
+credentials_b64 = os.getenv("GOOGLE_CREDENTIALS_B64")
+if not credentials_b64:
+    raise RuntimeError("Missing GOOGLE_CREDENTIALS_B64 environment variable")
 
-# Authenticate using service account
-gauth = GoogleAuth()
-gauth.auth_method = 'service'
-gauth.credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+credentials_json = json.loads(base64.b64decode(credentials_b64).decode("utf-8"))
+
+# Create credentials object
+credentials = service_account.Credentials.from_service_account_info(
     credentials_json,
     scopes=["https://www.googleapis.com/auth/drive"]
 )
-drive = GoogleDrive(gauth)
 
+drive_service = build("drive", "v3", credentials=credentials)
 
-def get_folder_id(folder_name):
-    query = f"title='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    folder_list = drive.ListFile({'q': query}).GetList()
-    if folder_list:
-        return folder_list[0]['id']
+def upload_to_drive(local_file_path, file_name, folder_name):
+    # Search for the folder
+    response = drive_service.files().list(
+        q=f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false",
+        spaces="drive",
+        fields="files(id, name)"
+    ).execute()
+
+    folder_id = None
+    if response["files"]:
+        folder_id = response["files"][0]["id"]
     else:
         # Create folder if it doesn't exist
-        folder_metadata = {
-            'title': folder_name,
-            'mimeType': 'application/vnd.google-apps.folder'
+        file_metadata = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder"
         }
-        folder = drive.CreateFile(folder_metadata)
-        folder.Upload()
-        return folder['id']
-
-
-def upload_to_drive(file_content, filename, folder_name):
-    folder_id = get_folder_id(folder_name)
+        file = drive_service.files().create(body=file_metadata, fields="id").execute()
+        folder_id = file.get("id")
 
     file_metadata = {
-        'title': filename,
-        'parents': [{'id': folder_id}]
+        "name": file_name,
+        "parents": [folder_id]
     }
-
-    file_drive = drive.CreateFile(file_metadata)
-    if isinstance(file_content, io.BytesIO):
-        file_drive.content = file_content
-    else:
-        raise ValueError("file_content must be a BytesIO object.")
-    
-    file_drive.Upload()
-    return file_drive['id']
-
+    media = MediaFileUpload(local_file_path)
+    uploaded_file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    return uploaded_file.get("id")
 
 def list_files_in_folder(folder_name):
-    folder_id = get_folder_id(folder_name)
-    query = f"'{folder_id}' in parents and trashed=false"
-    file_list = drive.ListFile({'q': query}).GetList()
-    return [{'title': file['title'], 'id': file['id']} for file in file_list]
+    folder_response = drive_service.files().list(
+        q=f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false",
+        spaces="drive",
+        fields="files(id, name)"
+    ).execute()
 
+    if not folder_response["files"]:
+        return []
+
+    folder_id = folder_response["files"][0]["id"]
+
+    files_response = drive_service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        spaces="drive",
+        fields="files(id, name)"
+    ).execute()
+
+    return files_response.get("files", [])
 
 def get_random_file(folder_name):
     files = list_files_in_folder(folder_name)
-    return random.choice(files) if files else None
+    if not files:
+        return None
+    return random.choice(files)
