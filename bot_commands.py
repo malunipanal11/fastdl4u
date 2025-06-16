@@ -1,55 +1,60 @@
-from config import TELEGRAM_BOT_TOKEN, ADMIN_USER_IDS, DELETE_COMMANDS_AFTER
-from drive_utils import upload_to_drive, get_random_file
-import requests
-import time
+import os
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+from drive_utils import upload_to_drive, list_files_in_folder, get_random_file
 
-async def handle_telegram_update(data):
-    message = data.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
-    text = message.get("text", "")
-    user_id = message.get("from", {}).get("id")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-    if not chat_id or not text:
-        return {"ok": True}
+# Initialize Telegram bot application
+app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    if text.startswith("/start"):
-        send_message(chat_id, "👋 Welcome! Send /images /videos /audio /document or /list /get <code>")
-    elif text.startswith("/images"):
-        send_temp_file(chat_id, "image", user_id)
-    elif text.startswith("/videos"):
-        send_temp_file(chat_id, "video", user_id)
-    elif text.startswith("/get"):
-        code = text.split(" ", 1)[-1].strip()
-        send_secret_file(chat_id, code)
-    elif text.startswith("/add") and user_id in ADMIN_USER_IDS:
-        send_message(chat_id, "📥 Ready to receive files. Send now.")
-    else:
-        send_message(chat_id, "❓ Unknown command.")
+# Command: /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Welcome! Use /upload, /list or /random.")
 
-    # Schedule deletion
-    time.sleep(DELETE_COMMANDS_AFTER)
-    delete_message(chat_id, message["message_id"])
+# Command: /upload
+async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        # Create a file dynamically
+        with open("telegram_upload.txt", "w") as f:
+            f.write("Uploaded from /upload command!")
 
-    return {"ok": True}
+        file_id = upload_to_drive("telegram_upload.txt", "UploadedFromTelegram.txt", "BotFiles")
+        await update.message.reply_text(f"Uploaded to Drive. File ID: {file_id}")
+    except Exception as e:
+        await update.message.reply_text(f"Upload failed: {str(e)}")
 
-def send_message(chat_id, text):
-    requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": text})
+# Command: /list
+async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        files = list_files_in_folder("BotFiles")
+        if not files:
+            await update.message.reply_text("No files found.")
+        else:
+            file_list = "\n".join(f"{f['name']} ({f['id']})" for f in files)
+            await update.message.reply_text(f"Files in Drive:\n{file_list}")
+    except Exception as e:
+        await update.message.reply_text(f"Listing failed: {str(e)}")
 
-def delete_message(chat_id, message_id):
-    requests.post(f"{API_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
+# Command: /random
+async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        file = get_random_file("BotFiles")
+        if file:
+            await update.message.reply_text(f"Random file: {file['name']} ({file['id']})")
+        else:
+            await update.message.reply_text("No files available.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
-def send_temp_file(chat_id, category, user_id):
-    file_info = get_random_file(category)
-    if not file_info:
-        send_message(chat_id, f"No {category} files available.")
-        return
-    file_id = file_info["file_id"]
-    requests.post(f"{API_URL}/sendDocument", json={"chat_id": chat_id, "document": file_id})
-    time.sleep(900)
-    requests.post(f"{API_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": file_id})
+# Add command handlers to the bot
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("upload", upload))
+app.add_handler(CommandHandler("list", list_files))
+app.add_handler(CommandHandler("random", random_file))
 
-def send_secret_file(chat_id, code):
-    # Lookup logic for secret file based on code
-    send_message(chat_id, f"Requested file with code: {code}")
+# This function is called by FastAPI when a webhook update is received
+async def handle_telegram_update(update_data: dict):
+    update = Update.de_json(update_data, app.bot)
+    await app.process_update(update)
