@@ -1,60 +1,48 @@
 import os
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-
-from drive_utils import upload_to_drive, list_files_in_folder, get_random_file
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
+from drive_utils import upload_to_drive, get_random_file
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN environment variable")
 
-# Initialize Telegram bot application
-app = Application.builder().token(TELEGRAM_TOKEN).build()
+# Initializes the bot application (not run in polling mode)
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# Command: /start
+# --- Bot Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! Use /upload, /list or /random.")
+    await update.message.reply_text("👋 Hello! I’m your Google Drive bot. Use /upload or /random.")
 
-# Command: /upload
 async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        # Create a file dynamically
-        with open("telegram_upload.txt", "w") as f:
-            f.write("Uploaded from /upload command!")
+    if not update.message or not update.message.document:
+        await update.message.reply_text("📄 Please send a file to upload.")
+        return
 
-        file_id = upload_to_drive("telegram_upload.txt", "UploadedFromTelegram.txt", "BotFiles")
-        await update.message.reply_text(f"Uploaded to Drive. File ID: {file_id}")
-    except Exception as e:
-        await update.message.reply_text(f"Upload failed: {str(e)}")
+    file = update.message.document
+    file_path = f"/tmp/{file.file_name}"
 
-# Command: /list
-async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        files = list_files_in_folder("BotFiles")
-        if not files:
-            await update.message.reply_text("No files found.")
-        else:
-            file_list = "\n".join(f"{f['name']} ({f['id']})" for f in files)
-            await update.message.reply_text(f"Files in Drive:\n{file_list}")
-    except Exception as e:
-        await update.message.reply_text(f"Listing failed: {str(e)}")
+    # Download the file
+    file_obj = await file.get_file()
+    await file_obj.download_to_drive(file_path)
 
-# Command: /random
-async def random_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        file = get_random_file("BotFiles")
-        if file:
-            await update.message.reply_text(f"Random file: {file['name']} ({file['id']})")
-        else:
-            await update.message.reply_text("No files available.")
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+    # Upload to Google Drive
+    file_id = upload_to_drive(file_path, file.file_name, "BotFiles")
+    await update.message.reply_text(f"✅ Uploaded `{file.file_name}` to Drive.\nID: `{file_id}`", parse_mode="Markdown")
 
-# Add command handlers to the bot
+async def random(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file = get_random_file("BotFiles")
+    if file:
+        await update.message.reply_text(f"🎲 Random File: {file['name']} (ID: `{file['id']}`)", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("📂 No files found in Drive folder.")
+
+# Add handlers to the app
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("upload", upload))
-app.add_handler(CommandHandler("list", list_files))
-app.add_handler(CommandHandler("random", random_file))
+app.add_handler(CommandHandler("random", random))
+app.add_handler(CommandHandler("upload", upload))  # In practice, upload is triggered by document
 
-# This function is called by FastAPI when a webhook update is received
-async def handle_telegram_update(update_data: dict):
+# --- Function to process updates from webhook ---
+async def handle_telegram_update(update_data):
     update = Update.de_json(update_data, app.bot)
     await app.process_update(update)
