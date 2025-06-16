@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from bot_commands import handle_telegram_update
 from drive_utils import upload_to_drive, list_files_in_folder, get_random_file
+import io
 
 app = FastAPI()
 
@@ -12,11 +13,9 @@ async def telegram_webhook(request: Request):
 
 @app.get("/upload-demo")
 def upload_demo():
-    # Create the file dynamically
-    with open("test.txt", "w") as f:
-        f.write("This is a demo file uploaded from FastAPI.")
-
-    file_id = upload_to_drive("test.txt", "RenderUpload.txt", "BotFiles")
+    # Create the file content in memory instead of writing to disk
+    file_content = io.BytesIO(b"This is a demo file uploaded from FastAPI (in-memory).")
+    file_id = upload_to_drive(file_content, "RenderUpload.txt", "BotFiles")
     return {"uploaded_file_id": file_id}
 
 @app.get("/list-files")
