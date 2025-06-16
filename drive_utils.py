@@ -1,9 +1,15 @@
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 
+# Configure PyDrive to use a service account
 gauth = GoogleAuth()
-gauth.LoadSettingsFile("settings.yaml")
-gauth.Authorize()
+gauth.settings['client_config_backend'] = 'service'
+gauth.settings['service_config'] = {
+    "client_service_email": "fastdl4u@steel-league-463017-t4.iam.gserviceaccount.com",
+    "private_key_file": "service_account.json"
+}
+
+gauth.ServiceAuth()
 drive = GoogleDrive(gauth)
 
 def upload_to_drive(file_path, title, parent_id):
