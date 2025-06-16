@@ -2,16 +2,9 @@ from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 import os
 
+# Authenticate using service_account.json
 gauth = GoogleAuth()
-gauth.LoadCredentialsFile("credentials.json")
-if not gauth.credentials:
-    gauth.LocalWebserverAuth()
-elif gauth.access_token_expired:
-    gauth.Refresh()
-else:
-    gauth.Authorize()
-gauth.SaveCredentialsFile("credentials.json")
-
+gauth.LoadServiceConfigFile("service_account.json")  # 👈 This must match your uploaded file
 drive = GoogleDrive(gauth)
 
 def upload_to_drive(file_path, title, parent_id):
@@ -21,5 +14,5 @@ def upload_to_drive(file_path, title, parent_id):
     return file['id']
 
 def get_random_file(category):
-    # Simulated random file selection
+    # Placeholder logic: replace this with actual category-based retrieval
     return {"file_id": "FAKE_FILE_ID"}
