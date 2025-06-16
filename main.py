@@ -1,8 +1,15 @@
+import logging
 from fastapi import FastAPI, Request
 from bot_commands import handle_telegram_update
 from drive_utils import upload_to_drive, list_files_in_folder, get_random_file
 
+logging.basicConfig(level=logging.INFO)
+
 app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    logging.info("🚀 App has started successfully!")
 
 @app.post("/")
 async def telegram_webhook(request: Request):
@@ -14,6 +21,7 @@ async def telegram_webhook(request: Request):
 def upload_demo():
     with open("test.txt", "w") as f:
         f.write("This is a demo file uploaded from FastAPI.")
+
     file_id = upload_to_drive("test.txt", "RenderUpload.txt", "BotFiles")
     return {"uploaded_file_id": file_id}
 
