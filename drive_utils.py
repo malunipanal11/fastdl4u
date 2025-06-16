@@ -1,76 +1,65 @@
 import os
+import io
 import json
 import base64
 import random
+from dotenv import load_dotenv
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# Decode the service account credentials from base64
-credentials_b64 = os.getenv("GOOGLE_CREDENTIALS_B64")
-if not credentials_b64:
+# Load .env file if available (for local development)
+load_dotenv()
+
+# Get and decode service account credentials from environment
+b64_credentials = os.getenv("GOOGLE_CREDENTIALS_B64")
+if not b64_credentials:
     raise RuntimeError("Missing GOOGLE_CREDENTIALS_B64 environment variable")
 
-credentials_json = json.loads(base64.b64decode(credentials_b64).decode("utf-8"))
+try:
+    credentials_json = json.loads(base64.b64decode(b64_credentials).decode("utf-8"))
+except Exception as e:
+    raise RuntimeError("Failed to decode GOOGLE_CREDENTIALS_B64: " + str(e))
 
-# Create credentials object
+# Authenticate with Google Drive
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 credentials = service_account.Credentials.from_service_account_info(
-    credentials_json,
-    scopes=["https://www.googleapis.com/auth/drive"]
+    credentials_json, scopes=SCOPES
 )
-
 drive_service = build("drive", "v3", credentials=credentials)
 
-def upload_to_drive(local_file_path, file_name, folder_name):
-    # Search for the folder
-    response = drive_service.files().list(
-        q=f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false",
-        spaces="drive",
-        fields="files(id, name)"
-    ).execute()
+# Folder name to ID map (replace with actual folder IDs if needed)
+FOLDER_MAP = {
+    "BotFiles": "YOUR_FOLDER_ID_HERE"  # Replace with actual folder ID
+}
 
-    folder_id = None
-    if response["files"]:
-        folder_id = response["files"][0]["id"]
-    else:
-        # Create folder if it doesn't exist
-        file_metadata = {
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder"
-        }
-        file = drive_service.files().create(body=file_metadata, fields="id").execute()
-        folder_id = file.get("id")
+def upload_to_drive(file_path, drive_filename, folder_name="BotFiles"):
+    folder_id = FOLDER_MAP.get(folder_name)
+    if not folder_id:
+        raise ValueError(f"Unknown folder name: {folder_name}")
 
     file_metadata = {
-        "name": file_name,
+        "name": drive_filename,
         "parents": [folder_id]
     }
-    media = MediaFileUpload(local_file_path)
-    uploaded_file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-    return uploaded_file.get("id")
-
-def list_files_in_folder(folder_name):
-    folder_response = drive_service.files().list(
-        q=f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false",
-        spaces="drive",
-        fields="files(id, name)"
+    media = MediaFileUpload(file_path, resumable=True)
+    file = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id"
     ).execute()
+    return file.get("id")
 
-    if not folder_response["files"]:
-        return []
+def list_files_in_folder(folder_name="BotFiles"):
+    folder_id = FOLDER_MAP.get(folder_name)
+    if not folder_id:
+        raise ValueError(f"Unknown folder name: {folder_name}")
 
-    folder_id = folder_response["files"][0]["id"]
+    query = f"'{folder_id}' in parents and trashed = false"
+    results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+    return results.get("files", [])
 
-    files_response = drive_service.files().list(
-        q=f"'{folder_id}' in parents and trashed=false",
-        spaces="drive",
-        fields="files(id, name)"
-    ).execute()
-
-    return files_response.get("files", [])
-
-def get_random_file(folder_name):
+def get_random_file(folder_name="BotFiles"):
     files = list_files_in_folder(folder_name)
-    if not files:
-        return None
-    return random.choice(files)
+    return random.choice(files) if files else None
