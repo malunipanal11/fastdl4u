@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env (for local dev)
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID"))
